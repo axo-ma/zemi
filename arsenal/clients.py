@@ -87,7 +87,7 @@ class Clients:
             package = distribution or module.split(".", 1)[0]
             raise ClientDependencyError(
                 f"Для этого клиента требуется рабочий пакет {package!r} "
-                "в виртуальном окружении @comp/.venv"
+                "в Python-интерпретаторе проекта"
             ) from error
 
     def _model(self) -> str:

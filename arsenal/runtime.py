@@ -1,4 +1,4 @@
-"""Ленивое управление процессами и локальными ресурсами ZEMI Arsenal."""
+"""Сессия управления процессами и локальными ресурсами ZEMI Arsenal."""
 
 from __future__ import annotations
 
@@ -11,15 +11,15 @@ from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 from .. import env, toml
-from .arsenal_objects import Llama, Model, NamedObjects
-from .llamas import DownloadError, download_llama, download_model
+from .downloads import DownloadError, download_llama, download_model
+from .objects import Llama, Model, NamedObjects
 
 
-__all__ = ["Arsenal"]
+__all__ = ["ArsenalSession"]
 
 
-class Arsenal:
-    """Объектное дерево playbook с ленивой активацией моделей."""
+class ArsenalSession:
+    """Объектное дерево Arsenal с ленивой активацией моделей."""
 
     def __init__(self, config_path: str | Path | dict[str, Any]) -> None:
         if isinstance(config_path, dict):
@@ -38,7 +38,7 @@ class Arsenal:
         if not isinstance(configs, list):
             raise ValueError("arsenal.llamas должен быть массивом таблиц")
 
-        self._playbook_active = False
+        self._active = False
         self._llama_router_mode = False
         self._llama_paths: dict[str, Path] = {}
         self._model_paths: dict[str, Path] = {}
@@ -58,7 +58,7 @@ class Arsenal:
 
         print()
         print("═" * 78)
-        print("ZEMI Playbook · ПРЕДВАРИТЕЛЬНОЕ СКАЧИВАНИЕ ARSENAL")
+        print("ZEMI Arsenal · ПРЕДВАРИТЕЛЬНОЕ СКАЧИВАНИЕ")
         if self.config_path is not None:
             print(f"TOML: {self.config_path}")
         print(
@@ -115,7 +115,7 @@ class Arsenal:
             f"серверов: {len(self._llama_paths)} · "
             f"моделей: {len(self._model_paths)}"
         )
-        print("Процессы не запущены; модели активируются через begin_playbook().")
+        print("Процессы не запущены; модели активируются после arsenal.begin().")
         print("═" * 78)
 
     @staticmethod
@@ -130,13 +130,13 @@ class Arsenal:
             return root / relative
         raise ValueError("Путь должен начинаться с @comp/ или @inst/")
 
-    def begin_playbook(
+    def _begin(
         self,
         stop_arsenal_before_begin: bool,
         llama_router_mode: bool = False,
     ) -> None:
         """Включает ленивую активацию моделей, не скачивая и не запуская их."""
-        self._playbook_active = False
+        self._active = False
         if stop_arsenal_before_begin:
             self._stop_arsenal()
 
@@ -154,7 +154,7 @@ class Arsenal:
                 )
 
         self._llama_router_mode = llama_router_mode
-        self._playbook_active = True
+        self._active = True
 
         mode = "ROUTER MODE" if llama_router_mode else "MODEL MODE"
         self._print_operation_header(
@@ -165,15 +165,15 @@ class Arsenal:
         print("Пример: arsenal.llamas[\"primary\"].models[\"qwen\"]")
         print("═" * 78)
 
-    def end_playbook(self, stop_arsenal_after_end: bool) -> None:
+    def _end(self, stop_arsenal_after_end: bool) -> None:
         """Отключает ленивую активацию и при необходимости останавливает серверы."""
-        self._playbook_active = False
+        self._active = False
         if stop_arsenal_after_end:
             self._stop_arsenal()
 
     def _activate_model(self, llama: Llama, model: Model) -> None:
         """При первом обращении готовит модель и запускает её llama-сервер."""
-        if not self._playbook_active:
+        if not self._active:
             return
 
         running_models = self._running_models.get(llama.name, set())
@@ -306,7 +306,7 @@ class Arsenal:
     def _print_operation_header(title: str, server_count: int) -> None:
         print()
         print("═" * 78)
-        print(f"ZEMI Playbook · {title}")
+        print(f"ZEMI Arsenal · {title}")
         print(f"Llama-серверов в конфигурации: {server_count}")
         print("═" * 78)
 
@@ -319,7 +319,7 @@ class Arsenal:
     def _print_activation_header(self, llama: Llama, model: Model) -> None:
         print()
         print("═" * 78)
-        print("ZEMI Playbook · ЛЕНИВАЯ АКТИВАЦИЯ МОДЕЛИ")
+        print("ZEMI Arsenal · ЛЕНИВАЯ АКТИВАЦИЯ МОДЕЛИ")
         print(f"Модель: {llama.name}/{model.name} · {model.alias}")
         print(f"Llama:  {llama.llama_build} · {llama.host}:{llama.port}")
         if self.config_path is not None:

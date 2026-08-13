@@ -1,5 +1,5 @@
 """Библиотека платформы ZEMI."""
 
-from . import env, toml
+from . import arsenal, env, toml
 
-__all__ = ["env", "toml"]
+__all__ = ["arsenal", "env", "toml"]

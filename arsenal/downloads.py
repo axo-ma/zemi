@@ -1,4 +1,4 @@
-"""Скачивание llama.cpp и GGUF-моделей для ZEMI Playbook."""
+"""Скачивание llama.cpp и GGUF-моделей для ZEMI Arsenal."""
 
 from __future__ import annotations
 
