@@ -1,4 +1,4 @@
-"""Создание общей версионированной Python-среды ZEMI Arsenal."""
+"""Создание стандартных и компонентных Python venv ZEMI Arsenal."""
 
 from __future__ import annotations
 
@@ -83,7 +83,7 @@ _BANNER_WIDTH = 78
 def _step(number: int, title: str, *details: str) -> None:
     print()
     print("═" * _BANNER_WIDTH)
-    print(f"ZEMI Arsenal Python · [{number}/3] {title}")
+    print(f"ZEMI Python venv · [{number}] {title}")
     print("─" * _BANNER_WIDTH)
     for detail in details:
         print(detail)
@@ -93,12 +93,12 @@ def _step(number: int, title: str, *details: str) -> None:
 def _step_done(number: int, message: str) -> None:
     print()
     print("─" * _BANNER_WIDTH)
-    print(f"✓ [{number}/3] {message}")
+    print(f"✓ [{number}] {message}")
     print("─" * _BANNER_WIDTH)
 
 
 @dataclass(frozen=True)
-class PythonEnvironment:
+class _PythonVenvPaths:
     component_root: Path
     instance_root: Path
     base_python: Path
@@ -108,12 +108,12 @@ class PythonEnvironment:
 
 
 @dataclass(frozen=True)
-class PythonEnvironmentConfig:
+class _PythonVenvConfig:
     winpython_version: str
     zemi_venv_version: str
 
 
-def config(path: str | Path = CONFIG_PATH) -> PythonEnvironmentConfig:
+def _config(path: str | Path = CONFIG_PATH) -> _PythonVenvConfig:
     """Загружает версии базового WinPython и среды ZEMI из TOML."""
     config_path = Path(path)
     with config_path.open("rb") as file:
@@ -125,7 +125,7 @@ def config(path: str | Path = CONFIG_PATH) -> PythonEnvironmentConfig:
             raise ValueError(f"{name} должен быть непустой строкой: {config_path}")
         if not re.fullmatch(r"[A-Za-z0-9_.-]+", value):
             raise ValueError(f"Некорректный {name}: {value!r}")
-    return PythonEnvironmentConfig(
+    return _PythonVenvConfig(
         winpython_version=values["winpython_version"],
         zemi_venv_version=values["zemi_venv_version"],
     )
@@ -145,12 +145,36 @@ def _find_root(start: Path, marker_names: tuple[str, ...]) -> Path:
     raise FileNotFoundError(f"Не найден корень с маркером: {', '.join(marker_names)}")
 
 
-def environment(start: str | Path | None = None) -> PythonEnvironment:
-    """Вычисляет все пути среды, не изменяя файловую систему."""
+def _environment_paths(
+    start: str | Path | None = None,
+    *,
+    component_name: str | None = None,
+    component_version: str | None = None,
+) -> _PythonVenvPaths:
+    """Вычисляет пути стандартного или компонентного venv."""
+    if (component_name is None) != (component_version is None):
+        raise ValueError(
+            "component_name и component_version должны быть указаны вместе"
+        )
+    if component_name is not None and not re.fullmatch(
+        r"[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?", component_name
+    ):
+        raise ValueError(
+            "component_name должен быть коротким именем из строчных букв, "
+            f"цифр, '.', '_' и '-': {component_name!r}"
+        )
+    if component_version is not None and not re.fullmatch(
+        r"[0-9]{6}", component_version
+    ):
+        raise ValueError(
+            "version должен иметь формат YYMMDD, например '260814': "
+            f"{component_version!r}"
+        )
+
     origin = Path.cwd() if start is None else Path(start)
     component_root = _find_root(origin, (".zemicomp",))
     instance_root = _find_root(component_root, INSTANCE_MARKERS)
-    versions = config()
+    versions = _config()
     base_python = (
         instance_root
         / "_pythons"
@@ -158,12 +182,11 @@ def environment(start: str | Path | None = None) -> PythonEnvironment:
         / "python"
         / "python.exe"
     )
-    environment_root = (
-        instance_root
-        / "_venvs"
-        / f"{versions.zemi_venv_version}-{versions.winpython_version}"
-    )
-    return PythonEnvironment(
+    name_parts = [versions.zemi_venv_version, versions.winpython_version]
+    if component_name is not None and component_version is not None:
+        name_parts[:0] = [component_name, component_version]
+    environment_root = instance_root / "_venvs" / "-".join(name_parts)
+    return _PythonVenvPaths(
         component_root=component_root,
         instance_root=instance_root,
         base_python=base_python,
@@ -173,11 +196,11 @@ def environment(start: str | Path | None = None) -> PythonEnvironment:
     )
 
 
-def create(paths: PythonEnvironment | None = None) -> PythonEnvironment:
+def _create_if_missing(paths: _PythonVenvPaths) -> bool:
     """Создаёт наследующую WinPython среду или проверяет существующую."""
-    paths = environment() if paths is None else paths
     if not paths.base_python.is_file():
         raise FileNotFoundError(f"Не найден базовый WinPython: {paths.base_python}")
+    created = not paths.python.is_file()
     if not paths.python.is_file():
         paths.environment_root.parent.mkdir(parents=True, exist_ok=True)
         subprocess.run(
@@ -191,13 +214,12 @@ def create(paths: PythonEnvironment | None = None) -> PythonEnvironment:
             cwd=paths.component_root,
             check=True,
         )
-    check(paths)
-    return paths
+    _verify(paths)
+    return created
 
 
-def check(paths: PythonEnvironment | None = None) -> None:
+def _verify(paths: _PythonVenvPaths) -> None:
     """Проверяет базовый Python и наследование его пакетов."""
-    paths = environment() if paths is None else paths
     if not paths.python.is_file():
         raise FileNotFoundError(f"Не найден Python среды: {paths.python}")
     config_path = paths.environment_root / "pyvenv.cfg"
@@ -219,9 +241,13 @@ def check(paths: PythonEnvironment | None = None) -> None:
         )
 
 
-def install(paths: PythonEnvironment | None = None) -> None:
+def _install_zemi_packages(paths: _PythonVenvPaths) -> None:
     """Устанавливает зависимости Arsenal в созданную среду."""
-    paths = create(paths)
+    if not paths.python.is_file():
+        raise FileNotFoundError(
+            "Python venv ещё не создан. Сначала вызовите create_if_missing(): "
+            f"{paths.python}"
+        )
     subprocess.run(
         [str(paths.python), "-m", "pip", "install", "--only-binary", ":all:", *PACKAGES],
         cwd=paths.component_root,
@@ -254,9 +280,8 @@ def install(paths: PythonEnvironment | None = None) -> None:
     )
 
 
-def configure_vscode(paths: PythonEnvironment | None = None) -> Path:
+def _set_as_vscode_interpreter(paths: _PythonVenvPaths) -> Path:
     """Сохраняет среду как default Python, не затирая другие настройки VS Code."""
-    paths = environment() if paths is None else paths
     settings: dict[str, object] = {}
     if paths.settings_path.is_file():
         loaded = json.loads(paths.settings_path.read_text(encoding="utf-8"))
@@ -274,65 +299,140 @@ def configure_vscode(paths: PythonEnvironment | None = None) -> Path:
     return paths.settings_path
 
 
-def setup(start: str | Path | None = None) -> PythonEnvironment:
-    """Создаёт среду, ставит зависимости и настраивает VS Code."""
-    paths = environment(start)
-    existed = paths.python.is_file()
-    action = (
-        "Среда уже существует — пересоздание не требуется."
-        if existed
-        else "Создаю новую общую виртуальную среду."
-    )
-    _step(
-        1,
-        "PYTHON-СРЕДА",
-        action,
-        f"Среда:    {paths.environment_root.name}",
-        f"Путь:     {paths.environment_root}",
-        f"WinPython: {paths.base_python.parent}",
-        "Режим:    прозрачное наследование пакетов WinPython",
-    )
-    create(paths)
-    _step_done(1, "Python-среда готова")
+class PythonVenv:
+    """Пошаговая установка стандартного или компонентного Python venv."""
 
-    _step(
-        2,
-        "БИБЛИОТЕКИ",
-        f"Устанавливаю и проверяю {len(PACKAGES) + 1} пакетов.",
-        "Ниже будет подробный вывод pip; следующий этап отмечен таким же баннером.",
-        "ВАЖНО: сообщения pip 'Attempting uninstall' можно игнорировать.",
-        "Они ожидаемы для среды, наследующей WinPython; важен итог установки.",
-    )
-    install(paths)
-    _step_done(2, "Библиотеки установлены и импорты проверены")
+    def __init__(self, paths: _PythonVenvPaths, *, component_specific: bool) -> None:
+        self._paths = paths
+        self._component_specific = component_specific
+        self._step_number = 0
 
-    _step(
-        3,
-        "ИНТЕРПРЕТАТОР ПРОЕКТА",
-        "Меняю python.defaultInterpreterPath текущего проекта.",
-        f"Интерпретатор: {paths.python}",
-    )
-    configure_vscode(paths)
-    _step_done(3, f"VS Code настроен: {paths.settings_path}")
+    @classmethod
+    def standard(cls, start: str | Path | None = None) -> PythonVenv:
+        """Возвращает стандартный общий venv ZEMI."""
+        return cls(_environment_paths(start), component_specific=False)
 
-    print()
-    print("═" * _BANNER_WIDTH)
-    print("✓ ZEMI ARSENAL PYTHON ГОТОВ")
-    print(f"Интерпретатор: {paths.python}")
-    print("═" * _BANNER_WIDTH)
-    return paths
+    @classmethod
+    def for_component(
+        cls,
+        *,
+        component_name: str,
+        version: str,
+        start: str | Path | None = None,
+    ) -> PythonVenv:
+        """Возвращает отдельный версионированный venv компонента."""
+        return cls(
+            _environment_paths(
+                start,
+                component_name=component_name,
+                component_version=version,
+            ),
+            component_specific=True,
+        )
+
+    @property
+    def python(self) -> Path:
+        return self._paths.python
+
+    @property
+    def root(self) -> Path:
+        return self._paths.environment_root
+
+    def _begin(self, title: str, *details: str) -> int:
+        self._step_number += 1
+        _step(self._step_number, title, *details)
+        return self._step_number
+
+    def create_if_missing(self) -> None:
+        """Создаёт venv при отсутствии и проверяет его основу."""
+        number = self._begin(
+            "СОЗДАНИЕ VENV",
+            f"Имя:      {self.root.name}",
+            f"Путь:     {self.root}",
+            f"WinPython: {self._paths.base_python.parent}",
+        )
+        created = _create_if_missing(self._paths)
+        message = "Python venv создан" if created else "Python venv уже существует"
+        _step_done(number, message)
+
+    def install_zemi_packages(self) -> None:
+        """Устанавливает и проверяет стандартные пакеты ZEMI."""
+        number = self._begin(
+            "ПАКЕТЫ ZEMI",
+            f"Устанавливаю и проверяю {len(PACKAGES) + 1} пакетов.",
+            "Сообщения pip 'Attempting uninstall' ожидаемы для наследуемого WinPython.",
+        )
+        _install_zemi_packages(self._paths)
+        _step_done(number, "Пакеты ZEMI установлены и проверены")
+
+    def install_packages(self, *packages: str) -> None:
+        """Устанавливает пользовательские пакеты в компонентный venv."""
+        number = self._begin("ПАКЕТЫ КОМПОНЕНТА")
+        if not packages:
+            _step_done(number, "Дополнительные пакеты не указаны — этап пропущен")
+            return
+        if not self._component_specific:
+            raise RuntimeError(
+                "Пакеты компонента нельзя устанавливать в стандартный общий venv. "
+                "Используйте PythonVenv.for_component(component_name=..., version=...)."
+            )
+        subprocess.run(
+            [str(self.python), "-m", "pip", "install", *packages],
+            cwd=self._paths.component_root,
+            check=True,
+        )
+        _step_done(number, f"Установлено пакетов компонента: {len(packages)}")
+
+    def run_script(self, script: str, *arguments: str) -> None:
+        """Запускает установочный Python-скрипт в компонентном venv."""
+        if not self._component_specific:
+            raise RuntimeError(
+                "Установочный код компонента нельзя запускать для стандартного общего "
+                "venv. Используйте PythonVenv.for_component(...)."
+            )
+        prefixes = {
+            "@comp/": self._paths.component_root,
+            "@inst/": self._paths.instance_root,
+        }
+        script_path: Path | None = None
+        for prefix, root in prefixes.items():
+            if script.startswith(prefix):
+                script_path = root / Path(script.removeprefix(prefix))
+                break
+        if script_path is None:
+            raise ValueError("Путь script должен начинаться с @comp/ или @inst/")
+        if not script_path.is_file():
+            raise FileNotFoundError(f"Не найден установочный скрипт: {script_path}")
+
+        number = self._begin("УСТАНОВОЧНЫЙ КОД КОМПОНЕНТА", f"Скрипт: {script}")
+        subprocess.run(
+            [str(self.python), str(script_path), *arguments],
+            cwd=self._paths.component_root,
+            check=True,
+        )
+        _step_done(number, "Установочный скрипт выполнен")
+
+    def verify(self) -> None:
+        """Проверяет Python venv и его связь с нужным WinPython."""
+        number = self._begin(
+            "ПРОВЕРКА VENV",
+            f"Python: {self.python}",
+        )
+        _verify(self._paths)
+        _step_done(number, "Python venv исправен")
+
+    def set_as_vscode_interpreter(self) -> None:
+        """Назначает Python venv интерпретатором текущего проекта VS Code."""
+        number = self._begin(
+            "ИНТЕРПРЕТАТОР VS CODE",
+            f"Python: {self.python}",
+        )
+        settings_path = _set_as_vscode_interpreter(self._paths)
+        _step_done(number, f"VS Code настроен: {settings_path}")
 
 
 __all__ = [
     "IMPORTS",
     "PACKAGES",
-    "PythonEnvironment",
-    "PythonEnvironmentConfig",
-    "check",
-    "config",
-    "configure_vscode",
-    "create",
-    "environment",
-    "install",
-    "setup",
+    "PythonVenv",
 ]
