@@ -289,8 +289,18 @@ def _set_as_vscode_interpreter(paths: _PythonVenvPaths) -> Path:
             raise ValueError(f"Настройки VS Code должны быть объектом: {paths.settings_path}")
         settings.update(loaded)
 
-    relative = os.path.relpath(paths.python, paths.component_root).replace("\\", "/")
-    settings["python.defaultInterpreterPath"] = f"${{workspaceFolder}}/{relative}"
+    settings.pop("python.defaultInterpreterPath", None)
+    settings.pop("python.terminal.activateEnvironment", None)
+
+    relative = os.path.relpath(paths.environment_root, paths.component_root).replace("\\", "/")
+    settings["python-envs.pythonProjects"] = [
+        {
+            "path": ".",
+            "envManager": "ms-python.python:venv",
+            "packageManager": "ms-python.python:pip",
+        }
+    ]
+    settings["python-envs.workspaceSearchPaths"] = [relative]
     paths.settings_path.parent.mkdir(parents=True, exist_ok=True)
     paths.settings_path.write_text(
         json.dumps(settings, ensure_ascii=False, indent=4) + "\n",
