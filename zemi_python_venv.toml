@@ -1,2 +1,2 @@
-winpython_version = "WPy64-312101"
-zemi_venv_version = "z260814"
+REQUIRED_WINPYTHON_VERSION = "WPy64-312101"
+REQUIRED_Z_BUNDLE_VERSION = "z260814"
