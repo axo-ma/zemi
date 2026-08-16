@@ -139,7 +139,6 @@ class PythonVenv:
         if not self.python.is_file(): raise FileNotFoundError(f"Не найден Python среды: {self.python}")
         values = _cfg(self.root / "pyvenv.cfg")
         if values.get("include-system-site-packages", "").lower() != "true": raise RuntimeError("WinPython: include-system-site-packages устарел")
-        if values.get("prompt") != self.prompt: raise RuntimeError(f"prompt venv устарел; ожидался {self.prompt!r}. Повторно запустите 00_init.py")
         result = subprocess.run([str(self.python), "-c", "import sys; print(sys.base_prefix)"], cwd=self._paths.component_root, check=True, text=True, capture_output=True)
         if Path(result.stdout.strip()).resolve() != self._paths.base_python.parent.resolve(): raise RuntimeError("WinPython устарел")
 
