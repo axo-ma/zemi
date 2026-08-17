@@ -1,0 +1,190 @@
+# Curated local GGUF set for llama.cpp Router Mode.
+# One server hosts all models; select a model by its unique alias.
+
+[[arsenal.llamas]]
+name = "curated_router"
+llama_build = "llama:b9222"
+host = "127.0.0.1"
+port = 8080
+startup_timeout = 120.0
+
+    # General-purpose Qwen 3.5 4B.
+    [[arsenal.llamas.models]]
+    name = "qwen35_4b"
+    source = "hf"
+    owner = "bartowski"
+    repository = "Qwen_Qwen3.5-4B-GGUF"
+    filename = "Qwen_Qwen3.5-4B-Q4_K_M.gguf"
+    alias = "qwen3.5-4b"
+    ctx_size = 4096
+    threads = 4
+    threads_batch = 4
+    reasoning = "off"
+        [[arsenal.llamas.models.assistants]]
+        name = "assistant"
+
+    # Compact LiquidAI general-purpose model.
+    [[arsenal.llamas.models]]
+    name = "lfm2_2_6b"
+    source = "hf"
+    owner = "LiquidAI"
+    repository = "LFM2-2.6B-GGUF"
+    filename = "LFM2-2.6B-Q4_K_M.gguf"
+    alias = "lfm2-2.6b"
+    ctx_size = 4096
+    threads = 4
+    threads_batch = 4
+    reasoning = "off"
+        [[arsenal.llamas.models.assistants]]
+        name = "assistant"
+
+    # Microsoft Phi-3.5 Mini Instruct 3.8B.
+    [[arsenal.llamas.models]]
+    name = "phi35_mini"
+    source = "hf"
+    owner = "bartowski"
+    repository = "Phi-3.5-mini-instruct-GGUF"
+    filename = "Phi-3.5-mini-instruct-Q4_K_M.gguf"
+    alias = "phi-3.5-mini"
+    ctx_size = 4096
+    threads = 4
+    threads_batch = 4
+    reasoning = "off"
+        [[arsenal.llamas.models.assistants]]
+        name = "assistant"
+
+    # Meta Llama 3.2 3B Instruct.
+    [[arsenal.llamas.models]]
+    name = "llama32_3b"
+    source = "hf"
+    owner = "bartowski"
+    repository = "Llama-3.2-3B-Instruct-GGUF"
+    filename = "Llama-3.2-3B-Instruct-Q4_K_M.gguf"
+    alias = "llama-3.2-3b"
+    ctx_size = 4096
+    threads = 4
+    threads_batch = 4
+    reasoning = "off"
+        [[arsenal.llamas.models.assistants]]
+        name = "assistant"
+
+    # Code-oriented Qwen 2.5 Coder 3B Instruct.
+    [[arsenal.llamas.models]]
+    name = "qwen25_coder_3b"
+    source = "hf"
+    owner = "bartowski"
+    repository = "Qwen2.5-Coder-3B-Instruct-GGUF"
+    filename = "Qwen2.5-Coder-3B-Instruct-Q4_K_M.gguf"
+    alias = "qwen2.5-coder-3b-instruct"
+    ctx_size = 4096
+    threads = 4
+    threads_batch = 4
+    reasoning = "off"
+        [[arsenal.llamas.models.assistants]]
+        name = "assistant"
+
+    # Small Qwen 3 post-trained model with reasoning disabled.
+    [[arsenal.llamas.models]]
+    name = "qwen3_1_7b"
+    source = "hf"
+    owner = "bartowski"
+    repository = "Qwen_Qwen3-1.7B-GGUF"
+    filename = "Qwen_Qwen3-1.7B-Q4_K_M.gguf"
+    alias = "qwen3-1.7b"
+    ctx_size = 2048
+    threads = 4
+    threads_batch = 4
+    reasoning = "off"
+        [[arsenal.llamas.models.assistants]]
+        name = "assistant"
+
+    # Hugging Face SmolLM2 1.7B Instruct.
+    [[arsenal.llamas.models]]
+    name = "smollm2_1_7b"
+    source = "hf"
+    owner = "bartowski"
+    repository = "SmolLM2-1.7B-Instruct-GGUF"
+    filename = "SmolLM2-1.7B-Instruct-Q4_K_M.gguf"
+    alias = "smollm2-1.7b"
+    ctx_size = 2048
+    threads = 4
+    threads_batch = 4
+    reasoning = "off"
+        [[arsenal.llamas.models.assistants]]
+        name = "assistant"
+
+    # Current Qwen 3 4B Instruct release.
+    [[arsenal.llamas.models]]
+    name = "qwen3_4b"
+    source = "hf"
+    owner = "bartowski"
+    repository = "Qwen_Qwen3-4B-Instruct-2507-GGUF"
+    filename = "Qwen_Qwen3-4B-Instruct-2507-Q4_K_M.gguf"
+    alias = "qwen3-4b-instruct-2507"
+    ctx_size = 4096
+    threads = 4
+    threads_batch = 4
+    reasoning = "off"
+        [[arsenal.llamas.models.assistants]]
+        name = "assistant"
+
+    # RAM-limit model: marginal on Windows with 8 GB RAM; do not run it
+    # concurrently with all Model Mode servers.
+    [[arsenal.llamas.models]]
+    name = "lfm25_8b_a1b"
+    source = "hf"
+    owner = "unsloth"
+    repository = "LFM2.5-8B-A1B-GGUF"
+    filename = "LFM2.5-8B-A1B-UD-Q4_K_M.gguf"
+    alias = "lfm2.5-8b-a1b"
+    ctx_size = 2048
+    threads = 4
+    threads_batch = 4
+    reasoning = "off"
+        [[arsenal.llamas.models.assistants]]
+        name = "assistant"
+
+    # Smallest LFM2 for fast smoke tests.
+    [[arsenal.llamas.models]]
+    name = "lfm2_350m"
+    source = "hf"
+    owner = "unsloth"
+    repository = "LFM2-350M-GGUF"
+    filename = "LFM2-350M-Q4_K_M.gguf"
+    alias = "lfm2-350m"
+    ctx_size = 1024
+    threads = 4
+    threads_batch = 4
+    reasoning = "off"
+        [[arsenal.llamas.models.assistants]]
+        name = "assistant"
+
+    # Lightweight LFM2 for low-resource comparisons.
+    [[arsenal.llamas.models]]
+    name = "lfm2_700m"
+    source = "hf"
+    owner = "unsloth"
+    repository = "LFM2-700M-GGUF"
+    filename = "LFM2-700M-Q4_K_M.gguf"
+    alias = "lfm2-700m"
+    ctx_size = 1024
+    threads = 4
+    threads_batch = 4
+    reasoning = "off"
+        [[arsenal.llamas.models.assistants]]
+        name = "assistant"
+
+    # Mid-size LFM2 for compact general-purpose use.
+    [[arsenal.llamas.models]]
+    name = "lfm2_1_2b"
+    source = "hf"
+    owner = "unsloth"
+    repository = "LFM2-1.2B-GGUF"
+    filename = "LFM2-1.2B-Q4_K_M.gguf"
+    alias = "lfm2-1.2b"
+    ctx_size = 2048
+    threads = 4
+    threads_batch = 4
+    reasoning = "off"
+        [[arsenal.llamas.models.assistants]]
+        name = "assistant"

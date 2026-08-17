@@ -91,7 +91,7 @@ class Assistant(_ConfigObject):
     """Ассистент модели и его исходная TOML-конфигурация."""
 
     config: dict[str, Any]
-    libs: Libs
+    clients: Libs
 
     @property
     def name(self) -> str:

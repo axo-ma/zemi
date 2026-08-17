@@ -43,7 +43,7 @@ class _Config:
 
 
 class _Adapter:
-    _path = "assistant.libs"
+    _path = "assistant.clients"
 
     def __init__(self, config: _Config) -> None:
         self._config = config
@@ -60,7 +60,7 @@ class _Adapter:
 
 
 class OpenAILib(_Adapter):
-    _path = "assistant.libs.openai.client"
+    _path = "assistant.clients.openai.client"
     @cached_property
     def client(self) -> "openai.OpenAI":
         module = self._module("openai")
@@ -68,7 +68,7 @@ class OpenAILib(_Adapter):
 
 
 class LiteLLMLib(_Adapter):
-    _path = "assistant.libs.litellm.router"
+    _path = "assistant.clients.litellm.router"
     @cached_property
     def router(self) -> "litellm.Router":
         os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
@@ -81,7 +81,7 @@ class LiteLLMLib(_Adapter):
 
 
 class DSPyLib(_Adapter):
-    _path = "assistant.libs.dspy.model"
+    _path = "assistant.clients.dspy.model"
     @cached_property
     def model(self) -> "dspy.LM":
         module = self._module("dspy", "dspy-ai")
@@ -89,7 +89,7 @@ class DSPyLib(_Adapter):
 
 
 class InstructorLib(_Adapter):
-    _path = "assistant.libs.instructor.client"
+    _path = "assistant.clients.instructor.client"
     def __init__(self, config: _Config, openai: OpenAILib) -> None:
         super().__init__(config)
         self._openai = openai
@@ -101,7 +101,7 @@ class InstructorLib(_Adapter):
 
 
 class PydanticAILib(_Adapter):
-    _path = "assistant.libs.pydantic_ai.model"
+    _path = "assistant.clients.pydantic_ai.model"
     @cached_property
     def model(self) -> "OpenAIChatModel":
         provider_module = self._module("pydantic_ai.providers.openai", "pydantic-ai")
@@ -116,7 +116,7 @@ class PydanticAILib(_Adapter):
 
 
 class SmolagentsLib(_Adapter):
-    _path = "assistant.libs.smolagents.model"
+    _path = "assistant.clients.smolagents.model"
     @cached_property
     def model(self) -> "smolagents.OpenAIServerModel":
         module = self._module("smolagents")
@@ -124,7 +124,7 @@ class SmolagentsLib(_Adapter):
 
 
 class LlamaIndexLib(_Adapter):
-    _path = "assistant.libs.llama_index.model"
+    _path = "assistant.clients.llama_index.model"
     @cached_property
     def model(self) -> "OpenAILike":
         module = self._module("llama_index.llms.openai_like", "llama-index-llms-openai-like")
@@ -132,7 +132,7 @@ class LlamaIndexLib(_Adapter):
 
 
 class HTTPXLib(_Adapter):
-    _path = "assistant.libs.httpx.client"
+    _path = "assistant.clients.httpx.client"
     @cached_property
     def client(self) -> "httpx.Client":
         module = self._module("httpx")
@@ -140,7 +140,7 @@ class HTTPXLib(_Adapter):
 
 
 class OutlinesLib(_Adapter):
-    _path = "assistant.libs.outlines.model"
+    _path = "assistant.clients.outlines.model"
     def __init__(self, config: _Config, openai: OpenAILib) -> None:
         super().__init__(config)
         self._openai = openai
@@ -152,7 +152,7 @@ class OutlinesLib(_Adapter):
 
 
 class GuidanceLib(_Adapter):
-    _path = "assistant.libs.guidance.model"
+    _path = "assistant.clients.guidance.model"
     @cached_property
     def model(self) -> "guidance.models.OpenAI":
         module = self._module("guidance.models", "guidance")
