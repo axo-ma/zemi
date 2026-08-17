@@ -9,9 +9,8 @@ from uuid import uuid4
 
 INSTANCE_MARKERS = (".zemiinst_dev", ".zemiinst_exp", ".zemiinst_prod")
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "zemi_python_venv.toml"
-PACKAGES = ("openai>=1.30.0", "httpx>=0.27.0", "pydantic>=2.7.0", "starlette==0.46.2", "cryptography==44.0.0", "joserfc==1.1.0", "python-calamine>=0.2.0", "openpyxl>=3.1.0", "markitdown>=0.0.1a0", "pandas>=2.2.0", "duckdb>=1.0.0", "fastembed>=0.3.0", "streamlit>=1.35.0", "dspy-ai>=2.4.0", "instructor>=1.3.0", "pydantic-ai>=0.0.14", "baml-py>=0.70.0", "smolagents>=1.0.0", "litellm>=1.35.0", "outlines>=0.0.40", "guidance>=0.1.15", "llama-index-core>=0.10.0", "llama-index-llms-openai>=0.1.0", "llama-index-llms-openai-like", "unstructured-client>=0.25.0", "ipykernel")
-IMPORTS = ("python_calamine", "openpyxl", "markitdown", "pandas", "duckdb", "fastembed", "streamlit", "dspy", "instructor", "pydantic_ai", "baml_py", "smolagents", "litellm", "outlines", "guidance", "llama_index.core", "llama_index.llms.openai_like", "unstructured_client", "llama_cpp_agent", "ipykernel")
-LLAMA_CPP_STUB = 'from unittest.mock import MagicMock\ndef __getattr__(name): return MagicMock(name=name)\nLlama = MagicMock\nLlamaGrammar = MagicMock\n'
+PACKAGES = ("openai>=1.30.0", "httpx>=0.27.0", "pydantic>=2.7.0", "starlette==0.46.2", "cryptography==44.0.0", "joserfc==1.1.0", "python-calamine>=0.2.0", "openpyxl>=3.1.0", "markitdown>=0.0.1a0", "pandas>=2.2.0", "duckdb>=1.0.0", "fastembed>=0.3.0", "streamlit>=1.35.0", "dspy-ai>=2.4.0", "instructor>=1.3.0", "pydantic-ai>=0.0.14", "smolagents>=1.0.0", "litellm>=1.35.0", "outlines>=0.0.40", "guidance>=0.1.15", "llama-index-core>=0.10.0", "llama-index-llms-openai>=0.1.0", "llama-index-llms-openai-like", "unstructured-client>=0.25.0", "ipykernel")
+IMPORTS = ("python_calamine", "openpyxl", "markitdown", "pandas", "duckdb", "fastembed", "streamlit", "dspy", "instructor", "pydantic_ai", "smolagents", "litellm", "outlines", "guidance", "llama_index.core", "llama_index.llms.openai_like", "unstructured_client", "ipykernel")
 _SAFE = re.compile(r"[A-Za-z0-9_.-]+")
 
 @dataclass(frozen=True)
@@ -167,9 +166,6 @@ class PythonVenv:
         number = self._begin("ПАКЕТЫ ZEMI")
         if not self.python.is_file(): raise FileNotFoundError("Сначала вызовите create_if_missing()")
         subprocess.run([str(self.python), "-m", "pip", "install", "--only-binary", ":all:", *PACKAGES], cwd=self._paths.component_root, check=True)
-        subprocess.run([str(self.python), "-m", "pip", "install", "--no-deps", "llama-cpp-agent>=0.2.0"], cwd=self._paths.component_root, check=True)
-        purelib = subprocess.run([str(self.python), "-c", "import sysconfig; print(sysconfig.get_paths()['purelib'])"], cwd=self._paths.component_root, check=True, text=True, capture_output=True).stdout.strip()
-        (Path(purelib) / "llama_cpp.py").write_text(LLAMA_CPP_STUB, encoding="utf-8")
         script = "import importlib, os; os.environ['LITELLM_LOCAL_MODEL_COST_MAP']='True'; " + f"[importlib.import_module(name) for name in {IMPORTS!r}]"
         subprocess.run([str(self.python), "-c", script], cwd=self._paths.component_root, check=True)
         _atomic(CONFIG_PATH, self.root / "zemi_python_venv.toml", self._paths.instance_root); self._z_done = True; self._done(number, "Пакеты ZEMI установлены и проверены")

@@ -6,7 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Generic, Iterator, TypeVar, overload
 
-from .clients import Clients
+from .libs import Libs
 
 
 __all__ = ["Assistant", "Llama", "Model", "NamedObjects"]
@@ -91,7 +91,7 @@ class Assistant(_ConfigObject):
     """Ассистент модели и его исходная TOML-конфигурация."""
 
     config: dict[str, Any]
-    clients: Clients
+    libs: Libs
 
     @property
     def name(self) -> str:
@@ -120,7 +120,7 @@ class Model(_ConfigObject):
                 [
                     Assistant(
                         config,
-                        Clients(
+                        Libs(
                             self._base_url,
                             model=self.config["alias"],
                             context_window=self.config["ctx_size"],
