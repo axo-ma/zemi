@@ -1,4 +1,4 @@
-"""Объектная модель дерева ZEMI Arsenal."""
+"""Object model for the ZEMI Arsenal tree."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ _T = TypeVar("_T")
 
 
 class _ConfigObject:
-    """Предметный объект с доступом к значениям исходной конфигурации."""
+    """Domain object exposing values from its source configuration."""
 
     config: dict[str, Any]
 
@@ -28,7 +28,7 @@ class _ConfigObject:
 
 
 class NamedObjects(Generic[_T]):
-    """Упорядоченная коллекция объектов с доступом по индексу и имени."""
+    """Ordered object collection accessible by index and name."""
 
     def __init__(
         self,
@@ -46,7 +46,7 @@ class NamedObjects(Generic[_T]):
         return item
 
     def _iter_raw(self) -> Iterator[_T]:
-        """Итерирует без побочных эффектов для внутреннего кода Arsenal."""
+        """Iterate without access side effects for internal Arsenal code."""
         return iter(self._items)
 
     @overload
@@ -88,7 +88,7 @@ class NamedObjects(Generic[_T]):
 
 @dataclass(frozen=True)
 class Assistant(_ConfigObject):
-    """Ассистент модели и его исходная TOML-конфигурация."""
+    """Model assistant and its source TOML configuration."""
 
     config: dict[str, Any]
     clients: Libs
@@ -100,7 +100,7 @@ class Assistant(_ConfigObject):
 
 @dataclass(frozen=True)
 class Model(_ConfigObject):
-    """Модель llama-сервера, её ассистенты и TOML-конфигурация."""
+    """Llama server model, its assistants, and its TOML configuration."""
 
     config: dict[str, Any]
     _base_url: str = field(repr=False)
@@ -143,7 +143,7 @@ class Model(_ConfigObject):
 
 @dataclass(frozen=True)
 class Llama(_ConfigObject):
-    """Llama-сервер, его модели и исходная TOML-конфигурация."""
+    """Llama server, its models, and its source TOML configuration."""
 
     config: dict[str, Any]
     _on_model_access: Callable[[Llama, Model], None] | None = field(

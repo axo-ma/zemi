@@ -1,4 +1,4 @@
-"""Скачивание llama.cpp и GGUF-моделей для ZEMI Arsenal."""
+"""Download llama.cpp and GGUF models for ZEMI Arsenal."""
 
 from __future__ import annotations
 
@@ -21,11 +21,11 @@ __all__ = [
 
 
 class DownloadError(RuntimeError):
-    """Ожидаемая ошибка скачивания внешнего ресурса."""
+    """Expected failure while downloading an external resource."""
 
 
 def _display_zemi_path(path: Path) -> str:
-    """Представляет файловый путь через маркер ZEMI."""
+    """Represent a file path through a ZEMI marker."""
     path = path.resolve()
     for marker, root in (("@comp", env.path.comp), ("@inst", env.path.inst)):
         try:
@@ -33,19 +33,19 @@ def _display_zemi_path(path: Path) -> str:
         except ValueError:
             continue
         return f"{marker}/{relative.as_posix()}"
-    raise ValueError(f"Путь находится вне ZEMI Instance: {path.name}")
+    raise ValueError(f"Path is outside the ZEMI Instance: {path.name}")
 
 
 def _format_size(size: float) -> str:
-    for unit in ("Б", "КБ", "МБ", "ГБ", "ТБ"):
-        if size < 1024 or unit == "ТБ":
-            return f"{size:.1f} {unit}" if unit != "Б" else f"{size:.0f} {unit}"
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if size < 1024 or unit == "TB":
+            return f"{size:.1f} {unit}" if unit != "B" else f"{size:.0f} {unit}"
         size /= 1024
     raise AssertionError("unreachable")
 
 
 class _Progress:
-    """Одинаково обновляет одну строку в терминале и одну область в Jupyter."""
+    """Update one terminal line and one Jupyter display area consistently."""
 
     def __init__(self, label: str, total: int | None) -> None:
         self.label = label
@@ -71,7 +71,7 @@ class _Progress:
         self.last_update = now
 
         elapsed = max(now - self.started_at, 0.001)
-        speed = f"{_format_size(loaded / elapsed)}/с"
+        speed = f"{_format_size(loaded / elapsed)}/s"
         if self.total:
             percent = min(loaded / self.total * 100, 100.0)
             amount = f"{_format_size(loaded)} / {_format_size(self.total)}"
@@ -80,7 +80,7 @@ class _Progress:
             message = f"{self.label}: {_format_size(loaded)} · {speed}"
 
         if done:
-            message += " · готово"
+            message += " · complete"
 
         if self.display_handle is not None:
             self.display_handle.update(message)
@@ -95,7 +95,7 @@ def _download(
     label: str,
     size_file: Path | None = None,
 ) -> None:
-    """Потоково скачивает URL с прогрессом и атомарно переносит файл на место."""
+    """Stream a URL with progress and atomically move the file into place."""
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_name(f".{destination.name}.{uuid4().hex}.part")
     request = Request(url, headers={"User-Agent": "ZEMI"})
@@ -107,9 +107,9 @@ def _download(
             if size_file is not None:
                 if total is None:
                     raise DownloadError(
-                        "Сервер не сообщил размер модели.\n"
-                        f"Адрес: {url}\n"
-                        "Без размера безопасное скачивание модели невозможно."
+                        "The server did not report the model size.\n"
+                        f"URL: {url}\n"
+                        "The model cannot be downloaded safely without its size."
                     )
                 size_file.write_text(str(total), encoding="ascii")
             progress = _Progress(label, total)
@@ -122,38 +122,38 @@ def _download(
 
             if total is not None and loaded != total:
                 raise DownloadError(
-                    "Скачивание завершилось раньше времени.\n"
-                    f"Получено: {_format_size(loaded)}\n"
-                    f"Ожидалось: {_format_size(total)}\n"
-                    f"Адрес: {url}\n"
-                    "Временный файл будет удалён; повторите скачивание."
+                    "The download ended prematurely.\n"
+                    f"Received: {_format_size(loaded)}\n"
+                    f"Expected: {_format_size(total)}\n"
+                    f"URL: {url}\n"
+                    "The temporary file will be removed; retry the download."
                 )
 
             progress.update(loaded, done=True)
         temporary.replace(destination)
     except HTTPError as error:
         temporary.unlink(missing_ok=True)
-        reason = error.reason or "без пояснения"
+        reason = error.reason or "no explanation provided"
         raise DownloadError(
-            "Сервер не отдал запрошенный файл.\n"
-            f"HTTP-статус: {error.code} {reason}\n"
-            f"Адрес: {url}\n"
-            "Проверьте имя репозитория, имя файла и доступность релиза."
+            "The server did not return the requested file.\n"
+            f"HTTP status: {error.code} {reason}\n"
+            f"URL: {url}\n"
+            "Check the repository name, file name, and release availability."
         ) from None
     except URLError as error:
         temporary.unlink(missing_ok=True)
         raise DownloadError(
-            "Не удалось подключиться к серверу скачивания.\n"
-            f"Причина: {error.reason}\n"
-            f"Адрес: {url}\n"
-            "Проверьте подключение к интернету и доступность сайта."
+            "Could not connect to the download server.\n"
+            f"Reason: {error.reason}\n"
+            f"URL: {url}\n"
+            "Check the internet connection and site availability."
         ) from None
     except OSError as error:
         temporary.unlink(missing_ok=True)
         raise DownloadError(
-            "Не удалось сохранить скачиваемый файл.\n"
-            f"Назначение: {_display_zemi_path(destination)}\n"
-            f"Причина: {error}"
+            "Could not save the downloaded file.\n"
+            f"Destination: {_display_zemi_path(destination)}\n"
+            f"Reason: {error}"
         ) from None
     except Exception:
         temporary.unlink(missing_ok=True)
@@ -161,12 +161,12 @@ def _download(
 
 
 def _model_size_file(model_path: Path) -> Path:
-    """Возвращает путь к файлу с ожидаемым размером модели."""
+    """Return the path to the file storing the expected model size."""
     return model_path.with_name(f"{model_path.name}.size")
 
 
 def _read_model_size(size_file: Path) -> int | None:
-    """Читает сохранённый размер модели или возвращает ``None``."""
+    """Read the stored model size or return ``None``."""
     try:
         value = size_file.read_text(encoding="ascii").strip()
     except (FileNotFoundError, OSError, UnicodeError):
@@ -175,7 +175,7 @@ def _read_model_size(size_file: Path) -> int | None:
 
 
 def _is_complete_model(model_path: Path, size_file: Path) -> bool:
-    """Проверяет модель по локальному файлу ожидаемого размера."""
+    """Validate a model against the locally stored expected size."""
     if not model_path.is_file():
         return False
 
@@ -185,7 +185,7 @@ def _is_complete_model(model_path: Path, size_file: Path) -> bool:
     if expected_size is None:
         size_file.write_text(str(actual_size), encoding="ascii")
         print(
-            "Создан локальный файл размера для ранее скачанной модели: "
+            "Created a local size file for an existing downloaded model: "
             f"{_display_zemi_path(size_file)}"
         )
         return True
@@ -194,24 +194,24 @@ def _is_complete_model(model_path: Path, size_file: Path) -> bool:
         return True
 
     print(
-        "Обнаружен неполный файл модели:\n"
-        f"  файл: {_display_zemi_path(model_path)}\n"
-        f"  скачано: {_format_size(actual_size)}\n"
-        f"  ожидается: {_format_size(expected_size)}\n"
-        "Модель будет скачана заново."
+        "An incomplete model file was found:\n"
+        f"  file: {_display_zemi_path(model_path)}\n"
+        f"  downloaded: {_format_size(actual_size)}\n"
+        f"  expected: {_format_size(expected_size)}\n"
+        "The model will be downloaded again."
     )
     return False
 
 
 def download_llama(build: str, *, url: str | None = None) -> Path:
-    """Скачивает и распаковывает Windows CPU-сборку llama.cpp в ZEMI Instance."""
+    """Download and extract a Windows CPU llama.cpp build into the ZEMI Instance."""
     normalized_build = build.removeprefix("llama:")
     target = env.path.llama(normalized_build)
     server = target / "llama-server.exe"
 
     if server.is_file():
         print(
-            f"llama.cpp {normalized_build} уже скачан: "
+            f"llama.cpp {normalized_build} is already downloaded: "
             f"{_display_zemi_path(target)}"
         )
         return target
@@ -223,7 +223,7 @@ def download_llama(build: str, *, url: str | None = None) -> Path:
     archive = env.path.tmp / f"llama-{normalized_build}-{uuid4().hex}.zip"
     extract_to = env.path.tmp / f"llama-{normalized_build}-{uuid4().hex}"
 
-    print(f"Скачиваю llama.cpp {normalized_build}...")
+    print(f"Downloading llama.cpp {normalized_build}...")
     try:
         _download(
             archive_url,
@@ -236,13 +236,13 @@ def download_llama(build: str, *, url: str | None = None) -> Path:
 
         extracted_server = next(extract_to.rglob("llama-server.exe"), None)
         if extracted_server is None:
-            raise FileNotFoundError("В архиве llama.cpp нет llama-server.exe")
+            raise FileNotFoundError("The llama.cpp archive does not contain llama-server.exe")
 
         source = extracted_server.parent
         target.parent.mkdir(parents=True, exist_ok=True)
         if target.exists():
             raise FileExistsError(
-                "Каталог llama.cpp существует, но не содержит "
+                "The llama.cpp directory exists but does not contain "
                 f"llama-server.exe: {_display_zemi_path(target)}"
             )
         source.replace(target)
@@ -252,7 +252,7 @@ def download_llama(build: str, *, url: str | None = None) -> Path:
             shutil.rmtree(extract_to)
 
     print(
-        f"llama.cpp {normalized_build} скачан: "
+        f"llama.cpp {normalized_build} downloaded: "
         f"{_display_zemi_path(target)}"
     )
     return target
@@ -266,26 +266,26 @@ def download_model(
     source: str = "hf",
     url: str | None = None,
 ) -> Path:
-    """Скачивает GGUF-модель в каталог текущего ZEMI Instance."""
+    """Download a GGUF model into the current ZEMI Instance directory."""
     target_directory = env.path.model(owner, repository, filename, source=source)
     target = target_directory / filename
     size_file = _model_size_file(target)
 
     if url is None:
         if source.removesuffix(":") != "hf":
-            raise ValueError("Для источника, отличного от hf, необходимо передать url")
+            raise ValueError("url is required for a source other than hf")
         url = f"https://huggingface.co/{owner}/{repository}/resolve/main/{filename}"
 
     if _is_complete_model(target, size_file):
-        print(f"Модель уже скачана: {_display_zemi_path(target)}")
+        print(f"Model is already downloaded: {_display_zemi_path(target)}")
         return target
 
-    print(f"Скачиваю модель {owner}/{repository}/{filename}...")
+    print(f"Downloading model {owner}/{repository}/{filename}...")
     _download(
         url,
         target,
-        label=f"Модель {owner}/{repository}/{filename}",
+        label=f"Model {owner}/{repository}/{filename}",
         size_file=size_file,
     )
-    print(f"Модель скачана: {_display_zemi_path(target)}")
+    print(f"Model downloaded: {_display_zemi_path(target)}")
     return target

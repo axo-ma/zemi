@@ -1,4 +1,4 @@
-"""Библиотека платформы ZEMI."""
+"""ZEMI platform library."""
 
 from . import arsenal, env, toml
 

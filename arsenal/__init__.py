@@ -1,4 +1,4 @@
-"""Управление локальными моделями и клиентами ZEMI Arsenal."""
+"""Manage local ZEMI Arsenal models and clients."""
 
 from . import python
 from .lifecycle import begin, end

@@ -1,4 +1,4 @@
-"""Сессия управления процессами и локальными ресурсами ZEMI Arsenal."""
+"""Session for managing ZEMI Arsenal processes and local resources."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ __all__ = ["ArsenalSession"]
 
 
 class ArsenalSession:
-    """Объектное дерево Arsenal с ленивой активацией моделей."""
+    """Arsenal object tree with lazy model activation."""
 
     def __init__(self, config_path: str | Path | dict[str, Any]) -> None:
         if isinstance(config_path, dict):
@@ -33,10 +33,10 @@ class ArsenalSession:
             configs = self.config["arsenal"]["llamas"]
         except (KeyError, TypeError) as error:
             raise ValueError(
-                "TOML должен содержать массив таблиц [[arsenal.llamas]]"
+                "TOML must contain the [[arsenal.llamas]] array of tables"
             ) from error
         if not isinstance(configs, list):
-            raise ValueError("arsenal.llamas должен быть массивом таблиц")
+            raise ValueError("arsenal.llamas must be an array of tables")
 
         self._active = False
         self._llama_router_mode = False
@@ -49,7 +49,7 @@ class ArsenalSession:
         ])
 
     def download(self) -> None:
-        """Заранее скачивает все llama.cpp-сборки и модели из TOML."""
+        """Download all llama.cpp builds and models from TOML in advance."""
         llama_items = list(self.llamas._iter_raw())
         model_count = sum(
             len(llama.models)
@@ -58,12 +58,12 @@ class ArsenalSession:
 
         print()
         print("═" * 78)
-        print("ZEMI Arsenal · ПРЕДВАРИТЕЛЬНОЕ СКАЧИВАНИЕ")
+        print("ZEMI Arsenal · PRE-DOWNLOAD")
         if self.config_path is not None:
             print(f"TOML: {self.config_path}")
         print(
-            f"Llama-серверов: {len(llama_items)} · "
-            f"моделей: {model_count}"
+            f"Llama servers: {len(llama_items)} · "
+            f"models: {model_count}"
         )
         print("═" * 78)
 
@@ -82,14 +82,14 @@ class ArsenalSession:
                         llama.llama_build
                     )
                 else:
-                    print(f"llama.cpp {llama.llama_build} уже подготовлен")
+                    print(f"llama.cpp {llama.llama_build} is already prepared")
 
                 for model in llama.models._iter_raw():
                     model_number += 1
                     key = self._model_key(llama, model)
                     print()
                     print(
-                        f"МОДЕЛЬ [{model_number}/{model_count}] · {key}\n"
+                        f"MODEL [{model_number}/{model_count}] · {key}\n"
                         f"{model.owner}/{model.repository}/{model.filename}"
                     )
                     if key not in self._model_paths:
@@ -100,10 +100,10 @@ class ArsenalSession:
                             source=model.source,
                         )
                     else:
-                        print(f"Модель {key} уже подготовлена")
+                        print(f"Model {key} is already prepared")
         except Exception as error:
             print("!" * 78)
-            print("✗ Предварительное скачивание Arsenal остановлено")
+            print("✗ Arsenal pre-download stopped")
             print(f"{type(error).__name__}: {error}")
             print("!" * 78)
             raise
@@ -111,11 +111,11 @@ class ArsenalSession:
         print()
         print("═" * 78)
         print(
-            f"✓ Все ресурсы Arsenal скачаны · "
-            f"серверов: {len(self._llama_paths)} · "
-            f"моделей: {len(self._model_paths)}"
+            f"✓ All Arsenal resources downloaded · "
+            f"servers: {len(self._llama_paths)} · "
+            f"models: {len(self._model_paths)}"
         )
-        print("Процессы не запущены; модели активируются после arsenal.begin().")
+        print("No processes started; models activate after arsenal.begin().")
         print("═" * 78)
 
     @staticmethod
@@ -126,31 +126,31 @@ class ArsenalSession:
                 continue
             relative = Path(path.removeprefix(prefix))
             if not relative.parts or relative.is_absolute() or ".." in relative.parts:
-                raise ValueError(f"Некорректный ZEMI-путь: {path!r}")
+                raise ValueError(f"Invalid ZEMI path: {path!r}")
             return root / relative
-        raise ValueError("Путь должен начинаться с @comp/ или @inst/")
+        raise ValueError("Path must start with @comp/ or @inst/")
 
     def _begin(
         self,
         stop_arsenal_before_begin: bool,
         llama_router_mode: bool = False,
     ) -> None:
-        """Включает ленивую активацию моделей, не скачивая и не запуская их."""
+        """Enable lazy model activation without downloading or starting models."""
         self._active = False
         if stop_arsenal_before_begin:
             self._stop_arsenal()
 
         if not llama_router_mode:
             invalid = [
-                f"{llama.name} ({len(llama.models)} моделей)"
+                f"{llama.name} ({len(llama.models)} models)"
                 for llama in self.llamas._iter_raw()
                 if len(llama.models) != 1
             ]
             if invalid:
                 details = ", ".join(invalid)
                 raise ValueError(
-                    "Без Router Mode каждый llama-сервер должен содержать ровно "
-                    f"одну модель. Нарушение: {details}"
+                    "Without Router Mode, every llama server must contain exactly "
+                    f"one model. Violation: {details}"
                 )
 
         self._llama_router_mode = llama_router_mode
@@ -158,21 +158,21 @@ class ArsenalSession:
 
         mode = "ROUTER MODE" if llama_router_mode else "MODEL MODE"
         self._print_operation_header(
-            f"ARSENAL ГОТОВ · {mode}",
+            f"ARSENAL READY · {mode}",
             len(self.llamas),
         )
-        print("Скачивание и запуск отложены до первого обращения к модели.")
-        print("Пример: arsenal.llamas[\"primary\"].models[\"qwen\"]")
+        print("Download and startup are deferred until the model is first accessed.")
+        print("Example: arsenal.llamas[\"primary\"].models[\"qwen\"]")
         print("═" * 78)
 
     def _end(self, stop_arsenal_after_end: bool) -> None:
-        """Отключает ленивую активацию и при необходимости останавливает серверы."""
+        """Disable lazy activation and stop servers when requested."""
         self._active = False
         if stop_arsenal_after_end:
             self._stop_arsenal()
 
     def _activate_model(self, llama: Llama, model: Model) -> None:
-        """При первом обращении готовит модель и запускает её llama-сервер."""
+        """Prepare a model and start its llama server on first access."""
         if not self._active:
             return
 
@@ -192,9 +192,9 @@ class ArsenalSession:
             if self._llama_router_mode:
                 models_to_run = set(running_models) | {model.name}
                 if process is not None and process.poll() is None:
-                    print(f"[3/4] Router {llama.name} уже запущен")
+                    print(f"[3/4] Router {llama.name} is already running")
                 else:
-                    print(f"[3/4] Запускаю {llama.name} в Router Mode...")
+                    print(f"[3/4] Starting {llama.name} in Router Mode...")
                     preset_path = self._write_router_preset(llama)
                     command = [
                         str(self._server_path(llama)),
@@ -203,11 +203,11 @@ class ArsenalSession:
                         "--port", str(llama.port),
                     ]
                     self._start_server(llama, command)
-                print(f"[4/4] Загружаю модель {model.alias} в Router Mode...")
+                print(f"[4/4] Loading model {model.alias} in Router Mode...")
                 self._load_router_model(llama, model)
             else:
                 models_to_run = {model.name}
-                print(f"[3/3] Запускаю {llama.name} с моделью {model.name}...")
+                print(f"[3/3] Starting {llama.name} with model {model.name}...")
                 command = [
                     str(self._server_path(llama)),
                     "--model", str(self._model_path(llama, model)),
@@ -223,28 +223,28 @@ class ArsenalSession:
             self._running_models[llama.name] = models_to_run
         except Exception as error:
             print("!" * 78)
-            print(f"✗ Не удалось активировать {llama.name}/{model.name}")
+            print(f"✗ Failed to activate {llama.name}/{model.name}")
             print(f"{type(error).__name__}: {error}")
             print("!" * 78)
             raise
 
         print("═" * 78)
-        print(f"✓ Модель готова: {llama.name}/{model.name}")
-        print(f"  Сервер: http://{llama.host}:{llama.port}")
+        print(f"✓ Model ready: {llama.name}/{model.name}")
+        print(f"  Server: http://{llama.host}:{llama.port}")
         print("═" * 78)
 
     def _prepare_llama(self, llama: Llama) -> None:
         total = 4 if self._llama_router_mode else 3
         if llama.name in self._llama_paths:
-            print(f"[1/{total}] llama.cpp {llama.llama_build} уже подготовлен")
+            print(f"[1/{total}] llama.cpp {llama.llama_build} is already prepared")
             return
 
-        print(f"[1/{total}] Проверяю llama.cpp {llama.llama_build}...")
+        print(f"[1/{total}] Checking llama.cpp {llama.llama_build}...")
         try:
             self._llama_paths[llama.name] = download_llama(llama.llama_build)
         except DownloadError as error:
             raise DownloadError(
-                f"Не удалось подготовить llama-server {llama.name!r} "
+                f"Failed to prepare llama-server {llama.name!r} "
                 f"({llama.llama_build}).\n\n{error}"
             ) from error
 
@@ -252,10 +252,10 @@ class ArsenalSession:
         total = 4 if self._llama_router_mode else 3
         key = self._model_key(llama, model)
         if key in self._model_paths:
-            print(f"[2/{total}] Модель {key} уже подготовлена")
+            print(f"[2/{total}] Model {key} is already prepared")
             return
 
-        print(f"[2/{total}] Проверяю модель {key}...")
+        print(f"[2/{total}] Checking model {key}...")
         try:
             self._model_paths[key] = download_model(
                 model.owner,
@@ -265,15 +265,15 @@ class ArsenalSession:
             )
         except DownloadError as error:
             raise DownloadError(
-                f"Не удалось подготовить модель {key!r}.\n"
-                f"Модель: {model.owner}/{model.repository}/{model.filename}"
+                f"Failed to prepare model {key!r}.\n"
+                f"Model: {model.owner}/{model.repository}/{model.filename}"
                 f"\n\n{error}"
             ) from error
 
     def _stop_arsenal(self) -> None:
-        """Останавливает работающие ресурсы Arsenal."""
+        """Stop running Arsenal resources."""
         llama_items = list(self.llamas._iter_raw())
-        self._print_operation_header("ОСТАНОВКА ARSENAL", len(llama_items))
+        self._print_operation_header("STOP ARSENAL", len(llama_items))
 
         for number, llama in enumerate(llama_items, start=1):
             print(
@@ -283,7 +283,7 @@ class ArsenalSession:
             status = self._stop_llama(llama)
             print(f"    {status}")
 
-        self._print_operation_result("✓ Arsenal остановлен")
+        self._print_operation_result("✓ Arsenal stopped")
 
     def _stop_llama(self, llama: Llama) -> str:
         process = self._processes.pop(llama.name, None)
@@ -294,11 +294,11 @@ class ArsenalSession:
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait()
-            status = f"✓ остановлен · PID {process.pid}"
+            status = f"✓ stopped · PID {process.pid}"
         elif self._stop_server_on_port(llama.port):
-            status = "✓ найден и остановлен"
+            status = "✓ found and stopped"
         else:
-            status = "· не запущен"
+            status = "· not running"
         self._running_models.pop(llama.name, None)
         return status
 
@@ -307,7 +307,7 @@ class ArsenalSession:
         print()
         print("═" * 78)
         print(f"ZEMI Arsenal · {title}")
-        print(f"Llama-серверов в конфигурации: {server_count}")
+        print(f"Llama servers in configuration: {server_count}")
         print("═" * 78)
 
     @staticmethod
@@ -319,8 +319,8 @@ class ArsenalSession:
     def _print_activation_header(self, llama: Llama, model: Model) -> None:
         print()
         print("═" * 78)
-        print("ZEMI Arsenal · ЛЕНИВАЯ АКТИВАЦИЯ МОДЕЛИ")
-        print(f"Модель: {llama.name}/{model.name} · {model.alias}")
+        print("ZEMI Arsenal · LAZY MODEL ACTIVATION")
+        print(f"Model: {llama.name}/{model.name} · {model.alias}")
         print(f"Llama:  {llama.llama_build} · {llama.host}:{llama.port}")
         if self.config_path is not None:
             print(f"TOML:   {self.config_path}")
@@ -333,26 +333,26 @@ class ArsenalSession:
     def _server_path(self, llama: Llama) -> Path:
         directory = self._llama_paths.get(llama.name)
         if directory is None:
-            raise RuntimeError(f"llama.cpp для {llama.name!r} ещё не подготовлен")
+            raise RuntimeError(f"llama.cpp for {llama.name!r} is not prepared yet")
         path = directory / "llama-server.exe"
         if not path.is_file():
-            raise FileNotFoundError(f"llama-server.exe не найден: {path.resolve()}")
+            raise FileNotFoundError(f"llama-server.exe was not found: {path.resolve()}")
         return path
 
     def _model_path(self, llama: Llama, model: Model) -> Path:
         key = self._model_key(llama, model)
         path = self._model_paths.get(key)
         if path is None:
-            raise RuntimeError(f"Модель {key!r} ещё не подготовлена")
+            raise RuntimeError(f"Model {key!r} is not prepared yet")
         if not path.is_file():
-            raise FileNotFoundError(f"Файл модели не найден: {path.resolve()}")
+            raise FileNotFoundError(f"Model file was not found: {path.resolve()}")
         return path
 
     def _start_server(self, llama: Llama, command: list[str]) -> None:
         if self._is_server_ready(llama.host, llama.port):
             raise RuntimeError(
-                f"На {llama.host}:{llama.port} уже работает HTTP-сервер. "
-                "Используйте stop_arsenal_before_begin=True для остановки Arsenal."
+                f"An HTTP server is already running at {llama.host}:{llama.port}. "
+                "Use stop_arsenal_before_begin=True to stop Arsenal."
             )
 
         process = subprocess.Popen(command)
@@ -362,19 +362,19 @@ class ArsenalSession:
             if process.poll() is not None:
                 self._processes.pop(llama.name, None)
                 raise RuntimeError(
-                    f"llama-server {llama.name!r} завершился с кодом "
+                    f"llama-server {llama.name!r} exited with code "
                     f"{process.returncode}"
                 )
             if self._is_server_ready(llama.host, llama.port):
-                print(f"    ✓ сервер готов · PID {process.pid}")
+                print(f"    ✓ server ready · PID {process.pid}")
                 return
             time.sleep(0.5)
 
         process.terminate()
         self._processes.pop(llama.name, None)
         raise TimeoutError(
-            f"llama-server {llama.name!r} не запустился за "
-            f"{float(llama.startup_timeout):.1f} секунд"
+            f"llama-server {llama.name!r} did not start within "
+            f"{float(llama.startup_timeout):.1f} seconds"
         )
 
     def _write_router_preset(
@@ -406,7 +406,7 @@ class ArsenalSession:
         preset_path.parent.mkdir(parents=True, exist_ok=True)
         preset_path.write_text("\n".join(lines), encoding="utf-8")
         print(
-            f"    Пресет {llama.name}: {len(models)} моделей · "
+            f"    Preset {llama.name}: {len(models)} models · "
             f"{preset_path}"
         )
         return preset_path
@@ -424,15 +424,15 @@ class ArsenalSession:
                 result = json.loads(response.read().decode("utf-8"))
         except (OSError, UnicodeError, json.JSONDecodeError) as error:
             raise RuntimeError(
-                f"Router {llama.name!r} не смог загрузить модель "
+                f"Router {llama.name!r} could not load model "
                 f"{model.alias!r}: {error}"
             ) from error
         if result.get("success") is not True:
             raise RuntimeError(
-                f"Router {llama.name!r} отклонил загрузку модели "
+                f"Router {llama.name!r} rejected loading model "
                 f"{model.alias!r}: {result}"
             )
-        print(f"    ✓ модель {model.alias} загружена")
+        print(f"    ✓ model {model.alias} loaded")
 
     @staticmethod
     def _is_server_ready(host: str, port: int, timeout: float = 0.5) -> bool:
@@ -472,7 +472,7 @@ class ArsenalSession:
         if output.startswith("WRONG_PROCESS:"):
             _, process_name, pid = output.split(":", 2)
             raise RuntimeError(
-                f"Порт {port} занят другим процессом: {process_name}, PID {pid}"
+                f"Port {port} is occupied by another process: {process_name}, PID {pid}"
             )
-        error = result.stderr.strip() or output or "неизвестная ошибка"
-        raise RuntimeError(f"Не удалось остановить сервер на порту {port}: {error}")
+        error = result.stderr.strip() or output or "unknown error"
+        raise RuntimeError(f"Could not stop the server on port {port}: {error}")

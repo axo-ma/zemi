@@ -1,4 +1,4 @@
-"""Публичный жизненный цикл ZEMI Arsenal."""
+"""Public ZEMI Arsenal lifecycle."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ def begin(
     stop_before_begin: bool,
     llama_router_mode: bool = False,
 ) -> ArsenalSession:
-    """Создаёт и запускает сессию Arsenal с ленивой активацией ресурсов."""
+    """Create and start an Arsenal session with lazy resource activation."""
     session = config if isinstance(config, ArsenalSession) else ArsenalSession(config)
     session._begin(
         stop_arsenal_before_begin=stop_before_begin,
@@ -27,7 +27,7 @@ def begin(
 
 
 def end(session: ArsenalSession, *, stop_after_end: bool) -> None:
-    """Завершает сессию и при необходимости останавливает Arsenal."""
+    """End a session and stop Arsenal when requested."""
     if not isinstance(session, ArsenalSession):
-        raise TypeError("session должен быть экземпляром ArsenalSession")
+        raise TypeError("session must be an ArsenalSession instance")
     session._end(stop_arsenal_after_end=stop_after_end)

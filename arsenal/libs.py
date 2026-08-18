@@ -1,4 +1,4 @@
-"""Ленивые типизированные адаптеры библиотек для сервера llama.cpp."""
+"""Lazy typed library adapters for a llama.cpp server."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ __all__ = ["LibDependencyError", "Libs"]
 
 
 class LibDependencyError(ImportError):
-    """Запрошенная интеграция не может быть создана без Python-пакета."""
+    """The requested integration cannot be created without a Python package."""
 
 
 @dataclass(frozen=True)
@@ -38,7 +38,7 @@ class _Config:
 
     def require_model(self) -> str:
         if not self.model:
-            raise ValueError("Имя модели не задано: передайте model конструктору Libs")
+            raise ValueError("Model name is not set: pass model to the Libs constructor")
         return self.model
 
 
@@ -54,8 +54,8 @@ class _Adapter:
         except (ImportError, OSError) as error:
             required = package or module.split(".", 1)[0]
             raise LibDependencyError(
-                f"Для {self._path} требуется пакет {required!r} "
-                "в Python-интерпретаторе проекта."
+                f"{self._path} requires package {required!r} "
+                "in the project Python interpreter."
             ) from error
 
 
@@ -111,7 +111,7 @@ class PydanticAILib(_Adapter):
         provider = provider_module.OpenAIProvider(openai_client=client)
         model_type = getattr(model_module, "OpenAIModel", None) or getattr(model_module, "OpenAIChatModel", None)
         if model_type is None:
-            raise LibDependencyError("Пакет 'pydantic-ai' не содержит OpenAIModel или OpenAIChatModel.")
+            raise LibDependencyError("Package 'pydantic-ai' does not provide OpenAIModel or OpenAIChatModel.")
         return model_type(self._config.require_model(), provider=provider)
 
 
@@ -160,17 +160,17 @@ class GuidanceLib(_Adapter):
 
 
 class Libs:
-    """Десять библиотечных интеграций с явными ролями client/router/model."""
+    """Ten library integrations with explicit client/router/model roles."""
 
     names: Final[tuple[str, ...]] = ("openai", "litellm", "dspy", "instructor", "pydantic_ai", "smolagents", "llama_index", "httpx", "outlines", "guidance")
 
     def __init__(self, base_url: str, *, model: str | None = None, context_window: int | None = None, api_key: str = "llama.cpp", timeout: float = 60.0) -> None:
         if not isinstance(base_url, str) or not base_url.strip():
-            raise ValueError("base_url должен быть непустой строкой")
+            raise ValueError("base_url must be a non-empty string")
         if timeout <= 0:
-            raise ValueError("timeout должен быть больше нуля")
+            raise ValueError("timeout must be greater than zero")
         if context_window is not None and context_window <= 0:
-            raise ValueError("context_window должен быть больше нуля")
+            raise ValueError("context_window must be greater than zero")
         server_url = base_url.strip().rstrip("/")
         if server_url.endswith("/v1"):
             server_url = server_url[:-3].rstrip("/")

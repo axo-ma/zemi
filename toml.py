@@ -1,14 +1,14 @@
-"""Чтение и общая валидация TOML-конфигураций ZEMI.
+"""Read and perform general validation of ZEMI TOML configurations.
 
-Модуль сохраняет стандартное дерево ``dict``/``list`` из :mod:`tomllib` и не
-создаёт предметные объекты. Дополнительная обработка ограничена проверкой:
+The module preserves the standard ``dict``/``list`` tree from :mod:`tomllib`
+and does not create domain objects. Additional processing only validates that:
 
-* непустые значения ``name`` в одном массиве таблиц должны быть уникальными;
-* строки с префиксом ``@inst/`` или ``@comp/`` должны указывать на существующий
-  путь внутри соответствующего корня ZEMI.
+* non-empty ``name`` values in one array of tables are unique;
+* strings prefixed with ``@inst/`` or ``@comp/`` point to an existing path
+  inside the corresponding ZEMI root.
 
-ZEMI-ссылки остаются исходными строками. Чтение содержимого связанных файлов —
-ответственность использующего конфигурацию модуля.
+ZEMI references remain unchanged strings. The module consuming the
+configuration is responsible for reading referenced file contents.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ _PATH_PREFIXES = {
 
 
 def _validate_reference(value: str, location: str) -> None:
-    """Проверяет существование ZEMI-пути, не изменяя исходную строку."""
+    """Validate that a ZEMI path exists without changing the source string."""
     for prefix, root_name in _PATH_PREFIXES.items():
         if not value.startswith(prefix):
             continue
@@ -39,18 +39,18 @@ def _validate_reference(value: str, location: str) -> None:
             or relative_path.is_absolute()
             or ".." in relative_path.parts
         ):
-            raise ValueError(f"Некорректный ZEMI-путь в {location}: {value!r}")
+            raise ValueError(f"Invalid ZEMI path at {location}: {value!r}")
 
         path = getattr(env.path, root_name) / relative_path
         if not path.exists():
             raise FileNotFoundError(
-                f"ZEMI-путь из {location} не существует: {value!r} ({path})"
+                f"ZEMI path at {location} does not exist: {value!r} ({path})"
             )
         return
 
 
 def _validate(value: Any, location: str = "root") -> None:
-    """Рекурсивно проверяет ссылки и уникальность имён в обычном TOML-дереве."""
+    """Recursively validate references and unique names in a plain TOML tree."""
     if isinstance(value, str):
         _validate_reference(value, location)
         return
@@ -70,10 +70,10 @@ def _validate(value: Any, location: str = "root") -> None:
             if name is None or name == "":
                 continue
             if not isinstance(name, str):
-                raise ValueError(f"{location}[{index}].name должен быть строкой")
+                raise ValueError(f"{location}[{index}].name must be a string")
             if name in names:
                 raise ValueError(
-                    f"повторяющееся имя {name!r} в массиве {location}"
+                    f"duplicate name {name!r} in array {location}"
                 )
             names.add(name)
 
@@ -82,7 +82,7 @@ def _validate(value: Any, location: str = "root") -> None:
 
 
 def load(path: str | Path) -> dict[str, Any]:
-    """Читает TOML и валидирует общие ограничения ZEMI без изменения данных."""
+    """Read TOML and validate general ZEMI constraints without changing data."""
     with Path(path).open("rb") as file:
         data = tomllib.load(file)
     _validate(data)
