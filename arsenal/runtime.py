@@ -18,11 +18,27 @@ from .objects import Llama, Model, NamedObjects
 __all__ = ["ArsenalSession"]
 
 
-class ArsenalSession:
-    """Arsenal object tree with lazy model activation."""
+_DEFAULT_CONFIG_PATH = (
+    Path(__file__).resolve().parent.parent
+    / "llm_curated_set_router_mode.toml"
+)
+_DEFAULT_CONFIG_LABEL = "zemi/llm_curated_set_router_mode.toml"
 
-    def __init__(self, config_path: str | Path | dict[str, Any]) -> None:
-        if isinstance(config_path, dict):
+
+class ArsenalSession:
+    """Arsenal object tree with lazy model activation.
+
+    With no configuration argument, use the curated Router Mode model set.
+    """
+
+    def __init__(
+        self,
+        config_path: str | Path | dict[str, Any] | None = None,
+    ) -> None:
+        if config_path is None:
+            self.config_path = _DEFAULT_CONFIG_LABEL
+            self.config = toml.load(_DEFAULT_CONFIG_PATH)
+        elif isinstance(config_path, dict):
             self.config_path: str | None = None
             self.config = config_path
         else:
@@ -162,7 +178,12 @@ class ArsenalSession:
             len(self.llamas),
         )
         print("Download and startup are deferred until the model is first accessed.")
-        print("Example: arsenal.llamas[\"primary\"].models[\"qwen\"]")
+        first_llama = next(self.llamas._iter_raw())
+        first_model = next(first_llama.models._iter_raw())
+        print(
+            f'Example: arsenal.llamas["{first_llama.name}"]'
+            f'.models["{first_model.name}"]'
+        )
         print("═" * 78)
 
     def _end(self, stop_arsenal_after_end: bool) -> None:
