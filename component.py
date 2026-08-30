@@ -6,6 +6,7 @@ import copy
 import json
 import time
 import tomllib
+from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping
@@ -51,21 +52,88 @@ def _resolve_params_path(value: str | Path, component_root: Path) -> Path:
     return resolved
 
 
+def _has_glob(value: str | Path) -> bool:
+    return any(character in str(value) for character in "*?[")
+
+
+def _resolve_params_glob(value: str | Path, component_root: Path) -> list[Path]:
+    params_directory = (component_root / "params").resolve()
+    label = str(value).replace("\\", "/")
+    if label.startswith("@comp/"):
+        label = label.removeprefix("@comp/")
+        if not label.startswith("params/"):
+            raise ValueError("Parameter glob must be inside @comp/params")
+        label = label.removeprefix("params/")
+
+    pattern = Path(label)
+    if pattern.is_absolute() or ".." in pattern.parts:
+        raise ValueError("Parameter glob must be relative to @comp/params")
+    if pattern.suffix.lower() != ".toml":
+        raise ValueError("Parameter glob must select TOML files")
+
+    matches: list[Path] = []
+    for path in sorted(
+        params_directory.glob(label),
+        key=lambda item: item.name.casefold(),
+    ):
+        resolved = path.resolve()
+        try:
+            resolved.relative_to(params_directory)
+        except ValueError:
+            raise ValueError("Parameter glob must stay inside @comp/params") from None
+        if resolved.is_file() and resolved.suffix.lower() == ".toml":
+            matches.append(resolved)
+    if not matches:
+        raise FileNotFoundError(f"Parameter glob matched no files: {value}")
+    return matches
+
+
+def _params_candidates(
+    component_root: Path,
+    params_file: str | Path | Sequence[str | Path] | None,
+) -> list[Path]:
+    if params_file is None:
+        params_directory = component_root / "params"
+        return sorted(
+            (
+                path.resolve()
+                for path in params_directory.glob("*.toml")
+                if path.is_file()
+            ),
+            key=lambda path: (
+                path.name != "default_params.toml",
+                path.name.casefold(),
+            ),
+        )
+
+    if isinstance(params_file, (str, Path)):
+        values = [params_file]
+    elif isinstance(params_file, Sequence):
+        values = list(params_file)
+        if not values:
+            raise ValueError("params_file sequence must not be empty")
+    else:
+        raise TypeError(
+            "params_file must be a path, glob, sequence of paths/globs, or None"
+        )
+
+    candidates: list[Path] = []
+    for value in values:
+        if not isinstance(value, (str, Path)):
+            raise TypeError("Every params_file item must be a string or Path")
+        if _has_glob(value):
+            candidates.extend(_resolve_params_glob(value, component_root))
+        else:
+            candidates.append(_resolve_params_path(value, component_root))
+
+    return list(dict.fromkeys(candidates))
+
+
 def _select_params_path(
     component_root: Path,
-    params_file: str | Path | None,
+    params_file: str | Path | Sequence[str | Path] | None,
 ) -> Path:
-    if params_file is not None:
-        return _resolve_params_path(params_file, component_root)
-
-    params_directory = component_root / "params"
-    candidates = sorted(
-        (path for path in params_directory.glob("*.toml") if path.is_file()),
-        key=lambda path: (
-            path.name != "default_params.toml",
-            path.name.casefold(),
-        ),
-    )
+    candidates = _params_candidates(component_root, params_file)
     if not candidates:
         raise FileNotFoundError("No TOML parameter files were found in @comp/params")
     if len(candidates) == 1:
@@ -294,7 +362,7 @@ class ZemiComponent:
 
     def __init__(
         self,
-        params_file: str | Path | None = None,
+        params_file: str | Path | Sequence[str | Path] | None = None,
     ) -> None:
         self.root = env.path.comp.root
         self.params_path = _select_params_path(self.root, params_file)
