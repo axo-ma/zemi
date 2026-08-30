@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import sys
 import time
 import tomllib
 from collections.abc import Sequence
@@ -261,6 +262,10 @@ class Playbook:
                 str(self.output_path),
                 parameters=copy.deepcopy(self.params),
                 cwd=str(self.component.root),
+                progress_bar=True,
+                log_output=False,
+                stdout_file=sys.stdout,
+                stderr_file=sys.stderr,
             )
         except Exception as error:
             duration = time.monotonic() - started
