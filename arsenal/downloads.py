@@ -27,7 +27,7 @@ class DownloadError(RuntimeError):
 def _display_zemi_path(path: Path) -> str:
     """Represent a file path through a ZEMI marker."""
     path = path.resolve()
-    for marker, root in (("@comp", env.path.comp), ("@inst", env.path.inst)):
+    for marker, root in (("@comp", env.path.comp.root), ("@inst", env.path.inst)):
         try:
             relative = path.relative_to(root.resolve())
         except ValueError:

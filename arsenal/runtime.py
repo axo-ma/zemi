@@ -64,6 +64,23 @@ class ArsenalSession:
             Llama(config, self._activate_model) for config in configs
         ])
 
+    def model(self, name: str) -> Model:
+        """Return one model by name without activating non-matching models."""
+        matches: list[tuple[Llama, Model]] = []
+        for llama in self.llamas._iter_raw():
+            for model in llama.models._iter_raw():
+                if model.name == name:
+                    matches.append((llama, model))
+        if not matches:
+            raise LookupError(f"No Arsenal model named {name!r} was found")
+        if len(matches) > 1:
+            servers = ", ".join(llama.name for llama, _model in matches)
+            raise LookupError(
+                f"Arsenal model name {name!r} is ambiguous across servers: {servers}"
+            )
+        llama, _model = matches[0]
+        return llama.models[name]
+
     def download(self) -> None:
         """Download all llama.cpp builds and models from TOML in advance."""
         llama_items = list(self.llamas._iter_raw())
@@ -137,7 +154,7 @@ class ArsenalSession:
     @staticmethod
     def _resolve_zemi_path(value: str | Path) -> Path:
         path = str(value).replace("\\", "/")
-        for prefix, root in (("@comp/", env.path.comp), ("@inst/", env.path.inst)):
+        for prefix, root in (("@comp/", env.path.comp.root), ("@inst/", env.path.inst)):
             if not path.startswith(prefix):
                 continue
             relative = Path(path.removeprefix(prefix))

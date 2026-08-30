@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 
 
@@ -23,16 +24,47 @@ def _start_directory(start_path: str | Path | None) -> Path:
     return path.resolve() if path.is_dir() else path.resolve().parent
 
 
-class _Paths:
-    """Dynamic paths for the current ZEMI Instance and Component."""
+class _ComponentPaths:
+    """Paths belonging to the current ZEMI Component."""
+
+    def __init__(self) -> None:
+        self._runid: Path | None = None
 
     @property
-    def comp(self) -> Path:
+    def root(self) -> Path:
         """Return the current ZEMI Component root identified by .zemicomp."""
-        for directory in (_start_directory(None), *_start_directory(None).parents):
+        start = _start_directory(None)
+        for directory in (start, *start.parents):
             if (directory / COMPONENT_MARKER).is_file():
                 return directory
         raise FileNotFoundError("No ZEMI Component root with a .zemicomp marker was found")
+
+    @property
+    def runid(self) -> Path:
+        """Create and cache this process's local component run directory."""
+        if self._runid is not None:
+            return self._runid
+
+        parent = self.root / ".tmp"
+        parent.mkdir(parents=True, exist_ok=True)
+        base_name = datetime.now().strftime("run%y%m%d-%H%M%S")
+        candidate = parent / base_name
+        suffix = 0
+        while True:
+            try:
+                candidate.mkdir()
+                self._runid = candidate
+                return candidate
+            except FileExistsError:
+                suffix += 1
+                candidate = parent / f"{base_name}-{suffix:02d}"
+
+
+class _Paths:
+    """Dynamic paths for the current ZEMI Instance and Component."""
+
+    def __init__(self) -> None:
+        self.comp = _ComponentPaths()
 
     @property
     def inst(self) -> Path:

@@ -22,7 +22,7 @@ from . import env
 
 _PATH_PREFIXES = {
     "@inst/": "inst",
-    "@comp/": "comp",
+    "@comp/": "comp.root",
 }
 
 
@@ -41,7 +41,10 @@ def _validate_reference(value: str, location: str) -> None:
         ):
             raise ValueError(f"Invalid ZEMI path at {location}: {value!r}")
 
-        path = getattr(env.path, root_name) / relative_path
+        root = env.path
+        for part in root_name.split("."):
+            root = getattr(root, part)
+        path = root / relative_path
         if not path.exists():
             raise FileNotFoundError(
                 f"ZEMI path at {location} does not exist: {value!r} ({path})"
