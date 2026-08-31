@@ -1,6 +1,9 @@
 # Curated local GGUF set for llama.cpp Model Mode.
 # Each model has an independent server and port.
 
+[arsenal]
+mode = "model"
+
 # General-purpose Qwen 3.5 4B.
 [[arsenal.llamas]]
 name = "qwen35_4b_server"

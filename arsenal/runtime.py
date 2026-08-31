@@ -23,6 +23,7 @@ _DEFAULT_CONFIG_PATH = (
     / "llm_curated_set_router_mode.toml"
 )
 _DEFAULT_CONFIG_LABEL = "zemi/llm_curated_set_router_mode.toml"
+_ARSENAL_MODES = {"model", "router"}
 
 
 class ArsenalSession:
@@ -46,8 +47,22 @@ class ArsenalSession:
             self.config = toml.load(self._resolve_zemi_path(config_path))
 
         try:
-            configs = self.config["arsenal"]["llamas"]
+            arsenal_config = self.config["arsenal"]
         except (KeyError, TypeError) as error:
+            raise ValueError("TOML must contain the [arsenal] table") from error
+        if not isinstance(arsenal_config, dict):
+            raise ValueError("arsenal must be a table")
+
+        mode = arsenal_config.get("mode")
+        if not isinstance(mode, str) or mode not in _ARSENAL_MODES:
+            raise ValueError(
+                "arsenal.mode is required and must be exactly 'model' or 'router'"
+            )
+        self.mode = mode
+
+        try:
+            configs = arsenal_config["llamas"]
+        except KeyError as error:
             raise ValueError(
                 "TOML must contain the [[arsenal.llamas]] array of tables"
             ) from error
@@ -55,7 +70,7 @@ class ArsenalSession:
             raise ValueError("arsenal.llamas must be an array of tables")
 
         self._active = False
-        self._llama_router_mode = False
+        self._router_mode = self.mode == "router"
         self._llama_paths: dict[str, Path] = {}
         self._model_paths: dict[str, Path] = {}
         self._processes: dict[str, subprocess.Popen] = {}
@@ -166,14 +181,13 @@ class ArsenalSession:
     def _begin(
         self,
         stop_arsenal_before_begin: bool,
-        llama_router_mode: bool = False,
     ) -> None:
         """Enable lazy model activation without downloading or starting models."""
         self._active = False
         if stop_arsenal_before_begin:
             self._stop_arsenal()
 
-        if not llama_router_mode:
+        if self.mode == "model":
             invalid = [
                 f"{llama.name} ({len(llama.models)} models)"
                 for llama in self.llamas._iter_raw()
@@ -182,14 +196,13 @@ class ArsenalSession:
             if invalid:
                 details = ", ".join(invalid)
                 raise ValueError(
-                    "Without Router Mode, every llama server must contain exactly "
+                    "In Model Mode, every llama server must contain exactly "
                     f"one model. Violation: {details}"
                 )
 
-        self._llama_router_mode = llama_router_mode
         self._active = True
 
-        mode = "ROUTER MODE" if llama_router_mode else "MODEL MODE"
+        mode = "ROUTER MODE" if self._router_mode else "MODEL MODE"
         self._print_operation_header(
             f"ARSENAL READY · {mode}",
             len(self.llamas),
@@ -227,7 +240,7 @@ class ArsenalSession:
             self._prepare_llama(llama)
             self._prepare_model(llama, model)
 
-            if self._llama_router_mode:
+            if self._router_mode:
                 models_to_run = set(running_models) | {model.name}
                 if process is not None and process.poll() is None:
                     print(f"[3/4] Router {llama.name} is already running")
@@ -272,7 +285,7 @@ class ArsenalSession:
         print("═" * 78)
 
     def _prepare_llama(self, llama: Llama) -> None:
-        total = 4 if self._llama_router_mode else 3
+        total = 4 if self._router_mode else 3
         if llama.name in self._llama_paths:
             print(f"[1/{total}] llama.cpp {llama.llama_build} is already prepared")
             return
@@ -287,7 +300,7 @@ class ArsenalSession:
             ) from error
 
     def _prepare_model(self, llama: Llama, model: Model) -> None:
-        total = 4 if self._llama_router_mode else 3
+        total = 4 if self._router_mode else 3
         key = self._model_key(llama, model)
         if key in self._model_paths:
             print(f"[2/{total}] Model {key} is already prepared")

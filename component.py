@@ -476,6 +476,19 @@ class ZemiComponent:
         self.stop_on_error = self.component_params.get("stop_on_error", True)
         if not isinstance(self.stop_on_error, bool):
             raise ValueError("component_params.stop_on_error must be boolean")
+        arsenal_params = self.component_params.get("arsenal")
+        if arsenal_params is None:
+            self.arsenal_config_path: str | None = None
+        elif not isinstance(arsenal_params, Mapping):
+            raise ValueError("component_params.arsenal must be a table")
+        else:
+            arsenal_config_path = arsenal_params.get("arsenal_config_path")
+            if not isinstance(arsenal_config_path, str) or not arsenal_config_path:
+                raise ValueError(
+                    "component_params.arsenal.arsenal_config_path must be a "
+                    "non-empty string"
+                )
+            self.arsenal_config_path = arsenal_config_path
         self.run_directory = env.path.comp.runid
         self.report = ComponentReport(self.name, self.root, self.run_directory, self.params_path.relative_to(self.root).as_posix(), self.pipeline_params)
         configs = self.params.get("playbooks_params", [])
@@ -489,6 +502,14 @@ class ZemiComponent:
                 raise ValueError(f"playbooks_params[{config_index}].playbook_params must be a table")
             label = f"playbooks_params[{config_index}].playbook_params"
             raw, reference_origins = reference_resolver.resolve_table(raw, label)
+            if (
+                self.arsenal_config_path is not None
+                and raw.get("arsenal_config_path") != self.arsenal_config_path
+            ):
+                raise ValueError(
+                    f"{label}.arsenal_config_path must match the shared "
+                    "component_params.arsenal.arsenal_config_path"
+                )
             for trial_index, (params, resolved) in enumerate(
                 _resolve_playbook_params(raw, label, config["playbook_name"], reference_origins)
             ):

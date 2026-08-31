@@ -1,6 +1,9 @@
 # Curated local GGUF set for llama.cpp Router Mode.
 # One server hosts all models; select a model by its unique alias.
 
+[arsenal]
+mode = "router"
+
 [[arsenal.llamas]]
 name = "curated_router"
 llama_build = "llama:b10507"

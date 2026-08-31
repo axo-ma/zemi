@@ -15,13 +15,11 @@ def begin(
     config: str | Path | dict[str, Any] | ArsenalSession,
     *,
     stop_before_begin: bool,
-    llama_router_mode: bool = False,
 ) -> ArsenalSession:
     """Create and start an Arsenal session with lazy resource activation."""
     session = config if isinstance(config, ArsenalSession) else ArsenalSession(config)
     session._begin(
         stop_arsenal_before_begin=stop_before_begin,
-        llama_router_mode=llama_router_mode,
     )
     return session
 
