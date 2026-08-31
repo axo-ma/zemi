@@ -7,7 +7,6 @@ import itertools
 import json
 import os
 import re
-import statistics
 import sys
 import time
 import tomllib
@@ -18,9 +17,6 @@ from typing import Any, Mapping
 
 from . import env
 from .playbook import PLAYBOOK_OUTPUT_MIME, validate_output_params
-
-
-_REPEAT_NAMES = {"seed", "repeat", "repeat_number", "repetition", "repetition_number", "trial", "trial_number", "run", "run_number"}
 
 
 def _playbook_name(item: object, index: int) -> str:
@@ -116,29 +112,61 @@ def _json_value(value: Any, label: str) -> Any:
         raise ValueError(f"{label} must contain only finite JSON-serializable values: {error}") from error
 
 
-def _expand_playbook_params(params: Mapping[str, Any], label: str) -> list[dict[str, Any]]:
-    """Expand direct parameter values of the exact ``{each=[...]}`` shape."""
+def _resolve_playbook_params(
+    params: Mapping[str, Any], label: str, playbook_name: str
+) -> list[tuple[dict[str, Any], dict[str, dict[str, Any]]]]:
+    """Resolve select wrappers, then expand exact each wrappers."""
     literal: dict[str, Any] = {}
     axes: list[tuple[str, list[Any]]] = []
+    resolved: dict[str, dict[str, Any]] = {}
     for name, value in params.items():
-        if isinstance(value, Mapping) and "each" in value:
-            if set(value) != {"each"}:
-                raise ValueError(f"{label}.{name}: each wrapper must contain only the 'each' key")
-            choices = value["each"]
+        wrapper_keys = set(value) & {"each", "select"} if isinstance(value, Mapping) else set()
+        if wrapper_keys:
+            if len(wrapper_keys) != 1 or set(value) != wrapper_keys:
+                mode = "each/select" if len(wrapper_keys) > 1 else next(iter(wrapper_keys))
+                raise ValueError(f"{label}.{name}: {mode} wrapper must contain exactly one mode key")
+            mode = next(iter(wrapper_keys))
+            choices = value[mode]
             if not isinstance(choices, list):
-                raise ValueError(f"{label}.{name}.each must be an array")
+                raise ValueError(f"{label}.{name}.{mode} must be an array")
             if not choices:
-                raise ValueError(f"{label}.{name}.each must not be empty")
-            axes.append((name, [_json_value(v, f"{label}.{name}.each") for v in choices]))
+                raise ValueError(f"{label}.{name}.{mode} must not be empty")
+            normalized = [_json_value(v, f"{label}.{name}.{mode}") for v in choices]
+            if mode == "each":
+                axes.append((name, normalized))
+                continue
+            print(f"Select one value for playbook {playbook_name!r}, parameter {name!r}:")
+            for index, choice in enumerate(normalized, 1):
+                print(f"  {index}. {json.dumps(choice, ensure_ascii=False)}")
+            try:
+                answer = input(
+                    f"Playbook {playbook_name!r}, parameter {name!r} (1-{len(normalized)}): "
+                ).strip()
+            except EOFError:
+                raise RuntimeError(
+                    f"Cannot select a value for playbook {playbook_name!r}, parameter {name!r}: interactive input is unavailable"
+                ) from None
+            if not answer.isdecimal() or not 1 <= int(answer) <= len(normalized):
+                raise ValueError(
+                    f"Invalid selection {answer!r} for playbook {playbook_name!r}, parameter {name!r}; expected a number from 1 to {len(normalized)}"
+                )
+            selected = copy.deepcopy(normalized[int(answer) - 1])
+            literal[name] = selected
+            resolved[name] = {"source": "select", "value": copy.deepcopy(selected)}
         else:
             literal[name] = _json_value(value, f"{label}.{name}")
     if not axes:
-        return [literal]
+        return [(literal, resolved)]
     expanded = []
     for values in itertools.product(*(axis[1] for axis in axes)):
         trial = copy.deepcopy(literal)
         trial.update((axes[i][0], copy.deepcopy(value)) for i, value in enumerate(values))
-        expanded.append(trial)
+        origins = copy.deepcopy(resolved)
+        origins.update(
+            (axes[i][0], {"source": "each", "value": copy.deepcopy(value)})
+            for i, value in enumerate(values)
+        )
+        expanded.append((trial, origins))
     return expanded
 
 
@@ -151,33 +179,18 @@ def _is_scalar(value: Any) -> bool:
     return value is None or isinstance(value, (str, int, float, bool))
 
 
-def _summarize_trials(trials: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
-    groups: dict[str, dict[str, Any]] = {}
-    for trial in trials:
-        params = {k: v for k, v in trial.get("input_params", {}).items() if k.casefold() not in _REPEAT_NAMES}
-        key = json.dumps([trial.get("playbook_name"), params], ensure_ascii=False, sort_keys=True)
-        group = groups.setdefault(key, {"playbook_name": trial.get("playbook_name"), "input_params": copy.deepcopy(params), "total": 0, "succeeded": 0, "failed": 0, "output_aggregates": {}, "_values": {}})
-        group["total"] += 1
-        status = trial.get("status")
-        if status == "succeeded":
-            group["succeeded"] += 1
-            for name, value in trial.get("output_params", {}).items():
-                if isinstance(value, bool) or (isinstance(value, (int, float)) and not isinstance(value, bool)):
-                    group["_values"].setdefault(name, []).append(value)
-        elif status == "failed":
-            group["failed"] += 1
-    result = []
-    for group in groups.values():
-        values_by_name = group.pop("_values")
-        for name, values in sorted(values_by_name.items()):
-            if all(isinstance(v, bool) for v in values):
-                count = len(values); true_count = sum(values)
-                group["output_aggregates"][name] = {"type": "boolean", "count": count, "true_count": true_count, "true_rate": true_count / count}
-            else:
-                numeric = [float(v) for v in values]
-                group["output_aggregates"][name] = {"type": "numeric", "count": len(numeric), "min": min(numeric), "max": max(numeric), "mean": statistics.fmean(numeric), "stddev": statistics.pstdev(numeric)}
-        result.append(group)
-    return result
+def _summarize_trials(trials: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    statuses = ("succeeded", "failed", "running")
+    ids = [trial.get("trial_id") for trial in trials if trial.get("trial_id") is not None]
+    trial_ids = {"total": ids}
+    trial_ids.update(
+        (status, [trial.get("trial_id") for trial in trials if trial.get("status") == status])
+        for status in statuses
+    )
+    return {
+        "counts": {name: len(values) for name, values in trial_ids.items()},
+        "trial_ids": trial_ids,
+    }
 
 
 class ComponentReport:
@@ -187,10 +200,10 @@ class ComponentReport:
         self.path = run_directory / "report.json"
         self.html_path = run_directory / "report.html"
         trials: list[dict[str, Any]] = []
-        self.data: dict[str, Any] = {"schema_version": 1, "component_name": component_name, "component_root": str(component_root), "params_file": params_file, "pipeline_params": copy.deepcopy(dict(pipeline_params)), "started_at": _timestamp(), "finished_at": None, "status": "running", "trials": trials, "playbooks": trials, "summary": []}
+        self.data: dict[str, Any] = {"schema_version": 1, "component_name": component_name, "component_root": str(component_root), "params_file": params_file, "pipeline_params": copy.deepcopy(dict(pipeline_params)), "started_at": _timestamp(), "finished_at": None, "status": "running", "trials": trials, "playbooks": trials, "summary": {}}
 
     def start_trial(self, playbook: "Playbook") -> dict[str, Any]:
-        entry = {"trial_id": playbook.trial_id, "playbook_name": playbook.playbook_name, "input_params": copy.deepcopy(playbook.params), "output_params": {}, "output_notebook": playbook.output_relative.as_posix(), "output_path": playbook.output_relative.as_posix(), "started_at": _timestamp(), "finished_at": None, "duration_seconds": None, "status": "running", "error": None}
+        entry = {"trial_id": playbook.trial_id, "playbook_name": playbook.playbook_name, "input_params": copy.deepcopy(playbook.params), "resolved_params": copy.deepcopy(playbook.resolved_params), "output_params": {}, "output_notebook": playbook.output_relative.as_posix(), "output_path": playbook.output_relative.as_posix(), "started_at": _timestamp(), "finished_at": None, "duration_seconds": None, "status": "running", "error": None}
         self.data["trials"].append(entry)
         self.save()
         return entry
@@ -224,7 +237,7 @@ class ComponentReport:
 class Playbook:
     """One expanded notebook trial executable through Papermill."""
 
-    def __init__(self, component: "ZemiComponent", config: Mapping[str, Any], *, config_index: int = 0, trial_index: int = 0, params: Mapping[str, Any] | None = None) -> None:
+    def __init__(self, component: "ZemiComponent", config: Mapping[str, Any], *, config_index: int = 0, trial_index: int = 0, params: Mapping[str, Any] | None = None, resolved_params: Mapping[str, Any] | None = None) -> None:
         self.component = component; self.config = copy.deepcopy(dict(config))
         self.playbook_name = _playbook_name(config, config_index)
         self.enabled = config.get("enabled", True)
@@ -234,6 +247,7 @@ class Playbook:
         if not isinstance(configured, Mapping):
             raise ValueError(f"playbook_params must be a table for {self.playbook_name!r}")
         self.params = copy.deepcopy(dict(configured))
+        self.resolved_params = copy.deepcopy(dict(resolved_params or {}))
         relative = Path(self.playbook_name)
         if relative.is_absolute() or ".." in relative.parts:
             raise ValueError(f"Invalid playbook_name: {self.playbook_name!r}")
@@ -287,6 +301,11 @@ class Playbook:
     def _print_start(self) -> None:
         line = "═" * 78
         print(f"\n{line}\nZEMI COMPONENT · PLAYBOOK START\nComponent : {self.component.name}\nPlaybook  : {self.playbook_name}\nTrial     : {self.trial_id}")
+        if self.resolved_params:
+            print("Resolved parameters:")
+            for name, metadata in self.resolved_params.items():
+                value = json.dumps(metadata["value"], ensure_ascii=False)
+                print(f"  {name} [{metadata['source']}] = {value}")
         print(f"Parameters: {self.component.params_path.relative_to(self.component.root).as_posix()}\nOutput    : {self.output_path.relative_to(self.component.root).as_posix()}\n{line}")
 
     def _print_success(self, duration: float) -> None:
@@ -348,8 +367,11 @@ class ZemiComponent:
             raw = config.get("playbook_params", {})
             if not isinstance(raw, Mapping):
                 raise ValueError(f"playbooks_params[{config_index}].playbook_params must be a table")
-            for trial_index, params in enumerate(_expand_playbook_params(raw, f"playbooks_params[{config_index}].playbook_params")):
-                playbooks.append(Playbook(self, config, config_index=config_index, trial_index=trial_index, params=params))
+            label = f"playbooks_params[{config_index}].playbook_params"
+            for trial_index, (params, resolved) in enumerate(
+                _resolve_playbook_params(raw, label, config["playbook_name"])
+            ):
+                playbooks.append(Playbook(self, config, config_index=config_index, trial_index=trial_index, params=params, resolved_params=resolved))
         self.playbooks = tuple(playbooks); self._closed = False; self.report.save()
 
     def run(self) -> None:
@@ -375,23 +397,29 @@ class ZemiComponent:
                 if any(trial.get("status") == "failed" for trial in self.report.data["trials"])
                 else "succeeded"
             )
-        self.report.data["finished_at"] = _timestamp(); self.report.save(); self._closed = True
+        self.report.data["finished_at"] = _timestamp()
+        self.report.save()
+        marker_tmp = self.run_directory / ".complete.tmp"
+        marker_tmp.write_bytes(b"")
+        os.replace(marker_tmp, self.run_directory / "complete")
+        self._closed = True
 
 
 def _report_html(data: Mapping[str, Any]) -> str:
     embedded = json.dumps(data, ensure_ascii=False, allow_nan=False).replace("<", "\\u003c")
     return f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ZEMI job report</title><style>
 :root{{--bg:#f6f7fb;--card:#fff;--ink:#172033;--muted:#667085;--line:#d9deea}}*{{box-sizing:border-box}}body{{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,sans-serif}}main{{max-width:1500px;margin:auto;padding:24px}}section{{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px;margin:16px 0;overflow:auto}}h1,h2{{margin:0 0 14px}}.controls{{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px}}input,select{{padding:8px;border:1px solid var(--line);border-radius:6px}}table{{border-collapse:collapse;width:100%}}th,td{{border-bottom:1px solid var(--line);padding:8px;text-align:left;vertical-align:top}}th{{cursor:pointer}}pre{{white-space:pre-wrap;word-break:break-word}}</style></head><body><main><h1>ZEMI job report</h1>
-<section id="overview"><h2>Overview</h2><div></div></section><section id="summary"><h2>Summary</h2><div></div></section>
+<section id="overview"><h2>Overview</h2><div></div></section>
 <section id="runs"><h2>Runs</h2><div class="controls"><input id="search" placeholder="Search all values"><select id="playbook-filter"><option value="">All playbooks</option></select><select id="status-filter"><option value="">All statuses</option></select><select id="parameter-filter"><option value="">Any parameter</option></select><input id="parameter-value" placeholder="Parameter value contains"></div><div></div></section>
-<section id="outputs"><h2>Outputs</h2><div></div></section><section id="errors"><h2>Errors</h2><div></div></section>
+<section id="summary"><h2>Summary</h2><div></div></section>
+<section id="run-details"><h2>Run details</h2><div></div></section><section id="errors"><h2>Errors</h2><div></div></section>
 <script id="report-data" type="application/json">{embedded}</script><script>
 const report=JSON.parse(document.getElementById('report-data').textContent),trials=report.trials||report.playbooks||[];const text=(tag,v)=>{{const n=document.createElement(tag);n.textContent=v;return n}},json=v=>JSON.stringify(v,null,2),scalar=v=>v===null||['string','number','boolean'].includes(typeof v);
 const counts={{total:trials.length,succeeded:trials.filter(x=>x.status==='succeeded').length,failed:trials.filter(x=>x.status==='failed').length}};document.querySelector('#overview div').append(text('pre',json({{component_name:report.component_name,params_file:report.params_file,status:report.status,started_at:report.started_at,finished_at:report.finished_at,counts}})));document.querySelector('#summary div').append(text('pre',json(report.summary||[])));
 const ins=[...new Set(trials.flatMap(t=>Object.keys(t.input_params||{{}}).filter(k=>scalar(t.input_params[k]))))].sort(),outs=[...new Set(trials.flatMap(t=>Object.keys(t.output_params||{{}}).filter(k=>scalar(t.output_params[k]))))].sort(),cols=['trial_id','playbook_name',...ins.map(k=>'in:'+k),...outs.map(k=>'out:'+k),'status','duration_seconds','output_notebook'];let sort='trial_id',asc=true;const val=(t,k)=>k.startsWith('in:')?(t.input_params||{{}})[k.slice(3)]:k.startsWith('out:')?(t.output_params||{{}})[k.slice(4)]:t[k];
 function render(){{let q=document.getElementById('search').value.toLowerCase(),p=document.getElementById('playbook-filter').value,s=document.getElementById('status-filter').value,pk=document.getElementById('parameter-filter').value,pv=document.getElementById('parameter-value').value.toLowerCase(),rows=trials.filter(t=>(!p||t.playbook_name===p)&&(!s||t.status===s)&&(!q||json(t).toLowerCase().includes(q))&&(!pk||!pv||String(val(t,pk)??'').toLowerCase().includes(pv)));rows.sort((a,b)=>String(val(a,sort)??'').localeCompare(String(val(b,sort)??''),undefined,{{numeric:true}})*(asc?1:-1));const table=document.createElement('table'),head=document.createElement('tr');cols.forEach(k=>{{const th=text('th',k);th.onclick=()=>{{asc=sort===k?!asc:true;sort=k;render()}};head.append(th)}});table.append(head);rows.forEach(t=>{{const tr=document.createElement('tr');cols.forEach(k=>{{const td=document.createElement('td'),v=val(t,k);if(k==='output_notebook'&&v){{const a=text('a',v);a.href=v;td.append(a)}}else td.textContent=v??'';tr.append(td)}});table.append(tr)}});document.querySelector('#runs div:last-child').replaceChildren(table)}}
 for(const p of [...new Set(trials.map(t=>t.playbook_name))].sort()){{const o=text('option',p);o.value=p;document.getElementById('playbook-filter').append(o)}}for(const s of [...new Set(trials.map(t=>t.status))].sort()){{const o=text('option',s);o.value=s;document.getElementById('status-filter').append(o)}}for(const k of [...ins.map(k=>'in:'+k),...outs.map(k=>'out:'+k)]){{const o=text('option',k);o.value=k;document.getElementById('parameter-filter').append(o)}}['search','playbook-filter','status-filter','parameter-filter','parameter-value'].forEach(id=>document.getElementById(id).addEventListener('input',render));render();
-const nested=trials.filter(t=>Object.values(t.output_params||{{}}).some(v=>!scalar(v)));document.querySelector('#outputs div').append(text(nested.length?'pre':'p',nested.length?json(nested.map(t=>({{trial_id:t.trial_id,output_params:t.output_params}}))):'No nested outputs.'));const errors=trials.filter(t=>t.status==='failed');document.querySelector('#errors div').append(text(errors.length?'pre':'p',errors.length?json(errors.map(t=>({{trial_id:t.trial_id,error:t.error}}))):'No errors.'));
+const details=document.querySelector('#run-details div');trials.forEach(t=>{{const block=document.createElement('article');block.append(text('h3',t.trial_id||'Trial'));block.append(text('pre',json({{playbook_name:t.playbook_name,status:t.status,input_params:t.input_params||{{}},output_params:t.output_params||{{}},error:t.error||null}})));details.append(block)}});const errors=trials.filter(t=>t.status==='failed');document.querySelector('#errors div').append(text(errors.length?'pre':'p',errors.length?json(errors.map(t=>({{trial_id:t.trial_id,error:t.error}}))):'No errors.'));
 </script></main></body></html>'''
 
 

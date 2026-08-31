@@ -21,13 +21,19 @@ def validate_output_params(value: Any) -> dict[str, Any]:
 
 
 def output_params(value: Mapping[str, Any]) -> None:
-    """Publish exactly one JSON mapping through the ZEMI notebook MIME type."""
+    """Publish one structured mapping with a standard notebook fallback."""
     global _published
     if _published:
         raise RuntimeError("output_params() may be called only once per notebook execution")
     normalized = validate_output_params(value)
     from IPython.display import display
-    display({PLAYBOOK_OUTPUT_MIME: normalized}, raw=True)
+    display(
+        {
+            PLAYBOOK_OUTPUT_MIME: normalized,
+            "text/plain": json.dumps(normalized, ensure_ascii=False, indent=2),
+        },
+        raw=True,
+    )
     _published = True
 
 
