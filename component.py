@@ -112,13 +112,127 @@ def _json_value(value: Any, label: str) -> Any:
         raise ValueError(f"{label} must contain only finite JSON-serializable values: {error}") from error
 
 
+class _ParamReferenceResolver:
+    """Resolve ref wrappers and table includes against one loaded TOML document."""
+
+    _WRAPPER_KEYS = {"ref", "each", "select"}
+
+    def __init__(self, document: Mapping[str, Any]) -> None:
+        self.document = document
+
+    def resolve_table(self, table: Mapping[str, Any], label: str, stack: tuple[str, ...] = ()) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+        if not isinstance(table, Mapping):
+            raise ValueError(f"{label} must be a table")
+        result: dict[str, Any] = {}
+        origins: dict[str, dict[str, Any]] = {}
+        if "__include__" in table:
+            wrappers = table["__include__"]
+            if isinstance(wrappers, Mapping):
+                wrappers = [wrappers]
+            elif not isinstance(wrappers, list):
+                raise ValueError(f"{label}.__include__ must be a ref wrapper or an array of ref wrappers")
+            if not wrappers:
+                raise ValueError(f"{label}.__include__ must not be an empty array")
+            for index, wrapper in enumerate(wrappers):
+                include_label = f"{label}.__include__[{index}]"
+                path = self._ref_path(wrapper, include_label)
+                included, nested_origins = self._resolve_reference(path, include_label, stack)
+                if not isinstance(included, Mapping):
+                    raise ValueError(f"{include_label}: ref {path!r} cannot be included because it does not resolve to a table")
+                for key, value in included.items():
+                    result[key] = copy.deepcopy(value)
+                    refs = [path]
+                    nested = nested_origins.get(key)
+                    if nested:
+                        refs.extend(nested.get("refs", []))
+                    origins[key] = {"source": "include", "refs": list(dict.fromkeys(refs)), "value": copy.deepcopy(value)}
+        for key, raw in table.items():
+            if key == "__include__":
+                continue
+            value, refs, _direct = self.resolve_value(raw, f"{label}.{key}", stack)
+            result[key] = value
+            if refs:
+                origins[key] = {"source": "ref", "refs": refs, "value": copy.deepcopy(value)}
+            else:
+                origins.pop(key, None)
+        return result, origins
+
+    def resolve_value(self, value: Any, label: str, stack: tuple[str, ...] = ()) -> tuple[Any, list[str], bool]:
+        if isinstance(value, Mapping):
+            wrapper_keys = set(value) & self._WRAPPER_KEYS
+            if "ref" in wrapper_keys:
+                path = self._ref_path(value, label)
+                resolved, _origins = self._resolve_reference(path, label, stack)
+                return copy.deepcopy(resolved), [path], True
+            if wrapper_keys:
+                if len(wrapper_keys) != 1 or set(value) != wrapper_keys:
+                    mode = "/".join(sorted(wrapper_keys))
+                    raise ValueError(f"{label}: {mode} wrapper must contain exactly one mode key")
+                mode = next(iter(wrapper_keys))
+                choices = value[mode]
+                if not isinstance(choices, list):
+                    return copy.deepcopy(dict(value)), [], False
+                resolved_choices = []
+                refs: list[str] = []
+                for index, choice in enumerate(choices):
+                    resolved, item_refs, _direct = self.resolve_value(choice, f"{label}.{mode}[{index}]", stack)
+                    resolved_choices.append(resolved)
+                    refs.extend(item_refs)
+                return {mode: resolved_choices}, list(dict.fromkeys(refs)), False
+            resolved, origins = self.resolve_table(value, label, stack)
+            refs = [ref for metadata in origins.values() for ref in metadata.get("refs", [])]
+            return resolved, list(dict.fromkeys(refs)), False
+        if isinstance(value, list):
+            resolved_items = []
+            refs: list[str] = []
+            for index, item in enumerate(value):
+                resolved, item_refs, _direct = self.resolve_value(item, f"{label}[{index}]", stack)
+                resolved_items.append(resolved)
+                refs.extend(item_refs)
+            return resolved_items, list(dict.fromkeys(refs)), False
+        return copy.deepcopy(value), [], False
+
+    def _ref_path(self, wrapper: Any, label: str) -> str:
+        if not isinstance(wrapper, Mapping) or set(wrapper) != {"ref"}:
+            raise ValueError(f"{label}: ref wrapper must contain exactly one key 'ref'")
+        path = wrapper["ref"]
+        if not isinstance(path, str) or not path or any(not part for part in path.split(".")):
+            raise ValueError(f"{label}.ref must be a non-empty dotted path")
+        return path
+
+    def _lookup(self, path: str, label: str) -> Any:
+        current: Any = self.document
+        for part in path.split("."):
+            if not isinstance(current, Mapping):
+                raise ValueError(f"{label}: ref {path!r} cannot traverse {part!r} through a non-table value")
+            if part not in current:
+                raise ValueError(f"{label}: ref path {path!r} was not found")
+            current = current[part]
+        return current
+
+    def _resolve_reference(self, path: str, label: str, stack: tuple[str, ...]) -> tuple[Any, dict[str, dict[str, Any]]]:
+        if path in stack:
+            cycle = " -> ".join((*stack, path))
+            raise ValueError(f"{label}: cyclic ref detected: {cycle}")
+        raw = self._lookup(path, label)
+        next_stack = (*stack, path)
+        if isinstance(raw, Mapping):
+            if "ref" in raw:
+                nested = self._ref_path(raw, f"ref {path!r}")
+                return self._resolve_reference(nested, f"ref {path!r}", next_stack)
+            return self.resolve_table(raw, f"ref {path!r}", next_stack)
+        resolved, _refs, _direct = self.resolve_value(raw, f"ref {path!r}", next_stack)
+        return resolved, {}
+
+
 def _resolve_playbook_params(
-    params: Mapping[str, Any], label: str, playbook_name: str
+    params: Mapping[str, Any], label: str, playbook_name: str,
+    reference_origins: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> list[tuple[dict[str, Any], dict[str, dict[str, Any]]]]:
     """Resolve select wrappers, then expand exact each wrappers."""
     literal: dict[str, Any] = {}
     axes: list[tuple[str, list[Any]]] = []
-    resolved: dict[str, dict[str, Any]] = {}
+    resolved: dict[str, dict[str, Any]] = copy.deepcopy(dict(reference_origins or {}))
     for name, value in params.items():
         wrapper_keys = set(value) & {"each", "select"} if isinstance(value, Mapping) else set()
         if wrapper_keys:
@@ -152,7 +266,10 @@ def _resolve_playbook_params(
                 )
             selected = copy.deepcopy(normalized[int(answer) - 1])
             literal[name] = selected
-            resolved[name] = {"source": "select", "value": copy.deepcopy(selected)}
+            metadata = {"source": "select", "value": copy.deepcopy(selected)}
+            if name in resolved and resolved[name].get("refs"):
+                metadata["refs"] = copy.deepcopy(resolved[name]["refs"])
+            resolved[name] = metadata
         else:
             literal[name] = _json_value(value, f"{label}.{name}")
     if not axes:
@@ -162,10 +279,12 @@ def _resolve_playbook_params(
         trial = copy.deepcopy(literal)
         trial.update((axes[i][0], copy.deepcopy(value)) for i, value in enumerate(values))
         origins = copy.deepcopy(resolved)
-        origins.update(
-            (axes[i][0], {"source": "each", "value": copy.deepcopy(value)})
-            for i, value in enumerate(values)
-        )
+        for i, value in enumerate(values):
+            name = axes[i][0]
+            metadata = {"source": "each", "value": copy.deepcopy(value)}
+            if name in origins and origins[name].get("refs"):
+                metadata["refs"] = copy.deepcopy(origins[name]["refs"])
+            origins[name] = metadata
         expanded.append((trial, origins))
     return expanded
 
@@ -345,6 +464,7 @@ class ZemiComponent:
         self.root = env.path.comp.root; self.params_path = _select_params_path(self.root, params_file)
         with self.params_path.open("rb") as file:
             self.params = tomllib.load(file)
+        reference_resolver = _ParamReferenceResolver(self.params)
         self.pipeline_params = _params_table(self.params, "pipeline_params"); self.component_params = _params_table(self.params, "component_params")
         configured_name = self.component_params.get("component_name")
         if configured_name is None:
@@ -368,8 +488,9 @@ class ZemiComponent:
             if not isinstance(raw, Mapping):
                 raise ValueError(f"playbooks_params[{config_index}].playbook_params must be a table")
             label = f"playbooks_params[{config_index}].playbook_params"
+            raw, reference_origins = reference_resolver.resolve_table(raw, label)
             for trial_index, (params, resolved) in enumerate(
-                _resolve_playbook_params(raw, label, config["playbook_name"])
+                _resolve_playbook_params(raw, label, config["playbook_name"], reference_origins)
             ):
                 playbooks.append(Playbook(self, config, config_index=config_index, trial_index=trial_index, params=params, resolved_params=resolved))
         self.playbooks = tuple(playbooks); self._closed = False; self.report.save()
