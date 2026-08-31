@@ -1,7 +1,8 @@
 """ZEMI platform library."""
 
-from . import arsenal, env, toml
+from . import arsenal, env, playbook, toml
 from .component import ComponentReport, Playbook, ZemiComponent
+from .playbook import output_params
 
 __all__ = [
     "ComponentReport",
@@ -9,5 +10,7 @@ __all__ = [
     "ZemiComponent",
     "arsenal",
     "env",
+    "output_params",
+    "playbook",
     "toml",
 ]
