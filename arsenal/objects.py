@@ -51,6 +51,10 @@ class NamedObjects(Generic[_T]):
         """Iterate without access side effects for internal Arsenal code."""
         return iter(self._items)
 
+    def _get_raw(self, key: int | str) -> _T:
+        """Return one item without triggering its public access callback."""
+        return self._items[key] if isinstance(key, int) else self._by_name[key]
+
     @overload
     def __getitem__(self, key: int) -> _T: ...
 
@@ -58,8 +62,7 @@ class NamedObjects(Generic[_T]):
     def __getitem__(self, key: str) -> _T: ...
 
     def __getitem__(self, key: int | str) -> _T:
-        item = self._items[key] if isinstance(key, int) else self._by_name[key]
-        return self._access(item)
+        return self._access(self._get_raw(key))
 
     def __getattr__(self, name: str) -> _T:
         try:

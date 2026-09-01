@@ -343,7 +343,7 @@ class ArsenalSession:
         endpoints = ([self.endpoints[endpoint_name]] if endpoint_name else
                      [self._resolve_endpoint(item) for item in self.endpoints._iter_raw()])
         for endpoint in endpoints:
-            models = ([endpoint.models[model_name]] if model_name else
+            models = ([endpoint.models._get_raw(model_name)] if model_name else
                       list(endpoint.models._iter_raw()))
             self._check_endpoint(endpoint, models)
 
@@ -352,6 +352,8 @@ class ArsenalSession:
     def _check_endpoint(self, endpoint: Endpoint, models: list[Model]) -> None:
         healthcheck = endpoint.healthcheck
         if healthcheck == "none":
+            for model in models:
+                self._validated_external.add((endpoint.name, model.name))
             return
         parts = urlsplit(endpoint.config["base_url"])
         safe_url = endpoint.config["base_url"]
@@ -359,6 +361,8 @@ class ArsenalSession:
             if healthcheck == "tcp":
                 port = parts.port or (443 if parts.scheme == "https" else 80)
                 with socket.create_connection((parts.hostname, port), endpoint.connect_timeout):
+                    for model in models:
+                        self._validated_external.add((endpoint.name, model.name))
                     return
             base = safe_url.rstrip("/")
             if not base.endswith("/v1"):
