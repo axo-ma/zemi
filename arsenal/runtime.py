@@ -74,6 +74,7 @@ class ArsenalSession:
         self._model_paths: dict[str, Path] = {}
         self._processes: dict[str, subprocess.Popen] = {}
         self._running_models: dict[str, set[str]] = {}
+        self._validated_external: set[tuple[str, str]] = set()
         self.llamas = NamedObjects([
             Llama(config, self._activate_model) for config in configs
         ])
@@ -296,7 +297,7 @@ class ArsenalSession:
 
     def _activate_external(self, endpoint: Endpoint, model: Model) -> None:
         """Validate an external endpoint lazily; never take lifecycle ownership."""
-        if self._active:
+        if self._active and (endpoint.name, model.name) not in self._validated_external:
             self.check(endpoint.name, model.name)
 
     def check(self, endpoint_name: str | None = None,
@@ -340,6 +341,8 @@ class ArsenalSession:
                             f"endpoint {endpoint.name!r} model {model.name!r}: "
                             f"remote model id {model.config['model']!r} was not found at {safe_url}"
                         )
+            for model in models:
+                self._validated_external.add((endpoint.name, model.name))
         except LookupError:
             raise
         except HTTPError as error:
@@ -355,7 +358,16 @@ class ArsenalSession:
             raise ConnectionError(f"endpoint {endpoint.name!r} at {safe_url}: connection refused") from error
         except (URLError, OSError, UnicodeError, json.JSONDecodeError) as error:
             reason = getattr(error, "reason", error)
-            category = "connection refused" if isinstance(reason, ConnectionRefusedError) else type(reason).__name__
+            if isinstance(reason, socket.gaierror):
+                category = "DNS failed"
+            elif isinstance(reason, ConnectionRefusedError):
+                category = "connection refused"
+            elif isinstance(reason, (TimeoutError, socket.timeout)):
+                raise TimeoutError(
+                    f"endpoint {endpoint.name!r} at {safe_url}: connection timed out"
+                ) from error
+            else:
+                category = type(reason).__name__
             raise ConnectionError(
                 f"endpoint {endpoint.name!r} at {safe_url}: {category}"
             ) from error
@@ -487,7 +499,7 @@ class ArsenalSession:
         if self._is_server_ready(llama.host, llama.port):
             raise RuntimeError(
                 f"An HTTP server is already running at {llama.host}:{llama.port}. "
-                "Use stop_arsenal_before_begin=True to stop Arsenal."
+                "Choose another managed port or configure that server as external."
             )
 
         process = subprocess.Popen(command)
@@ -576,38 +588,3 @@ class ArsenalSession:
                 return True
         except (URLError, TimeoutError):
             return False
-
-    @staticmethod
-    def _stop_server_on_port(port: int) -> bool:
-        command = f"""
-        $connection = Get-NetTCPConnection -LocalPort {port} -State Listen `
-            -ErrorAction SilentlyContinue | Select-Object -First 1
-        if (-not $connection) {{ Write-Output 'NOT_FOUND'; exit }}
-        $process = Get-Process -Id $connection.OwningProcess `
-            -ErrorAction SilentlyContinue
-        if (-not $process) {{ Write-Output 'NOT_FOUND'; exit }}
-        if ($process.ProcessName -ne 'llama-server') {{
-            Write-Output "WRONG_PROCESS:$($process.ProcessName):$($process.Id)"
-            exit
-        }}
-        Stop-Process -Id $process.Id -Force
-        Write-Output "STOPPED:$($process.Id)"
-        """
-        result = subprocess.run(
-            ["powershell", "-NoProfile", "-Command", command],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        output = result.stdout.strip()
-        if output.startswith("STOPPED:"):
-            return True
-        if output == "NOT_FOUND":
-            return False
-        if output.startswith("WRONG_PROCESS:"):
-            _, process_name, pid = output.split(":", 2)
-            raise RuntimeError(
-                f"Port {port} is occupied by another process: {process_name}, PID {pid}"
-            )
-        error = result.stderr.strip() or output or "unknown error"
-        raise RuntimeError(f"Could not stop the server on port {port}: {error}")
