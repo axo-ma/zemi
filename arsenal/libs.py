@@ -203,18 +203,20 @@ class Libs:
                  context_window: int | None = None, api_key: str = "llama.cpp",
                  timeout: float = 60.0, protocol: str = "openai",
                  provider: str = "custom",
-                 headers: dict[str, str] | None = None) -> None:
+                 headers: dict[str, str] | None = None,
+                 exact_base_url: bool = False) -> None:
         if not isinstance(base_url, str) or not base_url.strip():
             raise ValueError("base_url must be a non-empty string")
         if timeout <= 0:
             raise ValueError("timeout must be greater than zero")
         if context_window is not None and context_window <= 0:
             raise ValueError("context_window must be greater than zero")
-        server_url = base_url.strip().rstrip("/")
-        if server_url.endswith("/v1"):
+        configured_url = base_url.strip().rstrip("/")
+        server_url = configured_url
+        if not exact_base_url and server_url.endswith("/v1"):
             server_url = server_url[:-3].rstrip("/")
         self.server_url = server_url
-        self.openai_url = f"{server_url}/v1"
+        self.openai_url = configured_url if exact_base_url else f"{server_url}/v1"
         self.model = model
         self.context_window = context_window
         self.api_key = api_key

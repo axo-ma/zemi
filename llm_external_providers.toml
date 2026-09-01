@@ -1,0 +1,173 @@
+# Values are resolved lazily from @inst/_secrets/arsenal.env.
+[arsenal]
+mode = "router"
+
+[[arsenal.endpoints]]
+name = "openrouter"
+kind = "external"
+protocol = "openai"
+provider = "openrouter"
+base_url = "https://openrouter.ai/api/v1"
+api_key = { env = "OPENROUTER_API_KEY", prompt = "Введите API-ключ OpenRouter", secret = true }
+healthcheck = "models"
+connect_timeout = 5.0
+request_timeout = 120.0
+validate_model = false
+    [[arsenal.endpoints.models]]
+    name = "openrouter_model"
+    model = { env = "OPENROUTER_MODEL", prompt = "Введите model ID OpenRouter", validate = "non_empty" }
+        [[arsenal.endpoints.models.assistants]]
+        name = "assistant"
+
+[[arsenal.endpoints]]
+name = "openrouter_free"
+kind = "external"
+protocol = "openai"
+provider = "openrouter"
+base_url = "https://openrouter.ai/api/v1"
+api_key = { env = "OPENROUTER_API_KEY", prompt = "Введите API-ключ OpenRouter", secret = true }
+healthcheck = "none"
+connect_timeout = 5.0
+request_timeout = 120.0
+validate_model = false
+    [[arsenal.endpoints.models]]
+    name = "openrouter_free"
+    model = "openrouter/free"
+        [[arsenal.endpoints.models.assistants]]
+        name = "assistant"
+
+[[arsenal.endpoints]]
+name = "openai"
+kind = "external"
+protocol = "openai"
+provider = "openai"
+base_url = "https://api.openai.com/v1"
+api_key = { env = "OPENAI_API_KEY", prompt = "Введите API-ключ OpenAI", secret = true }
+healthcheck = "models"
+connect_timeout = 5.0
+request_timeout = 120.0
+validate_model = true
+    [[arsenal.endpoints.models]]
+    name = "openai_model"
+    model = { env = "OPENAI_MODEL", prompt = "Введите model ID OpenAI", validate = "non_empty" }
+        [[arsenal.endpoints.models.assistants]]
+        name = "assistant"
+
+[[arsenal.endpoints]]
+name = "anthropic"
+kind = "external"
+protocol = "anthropic"
+provider = "anthropic"
+base_url = "https://api.anthropic.com"
+api_key = { env = "ANTHROPIC_API_KEY", prompt = "Введите API-ключ Anthropic", secret = true }
+healthcheck = "none"
+connect_timeout = 5.0
+request_timeout = 120.0
+validate_model = false
+    [[arsenal.endpoints.models]]
+    name = "anthropic_model"
+    model = { env = "ANTHROPIC_MODEL", prompt = "Введите model ID Anthropic", validate = "non_empty" }
+        [[arsenal.endpoints.models.assistants]]
+        name = "assistant"
+
+[[arsenal.endpoints]]
+name = "gemini"
+kind = "external"
+protocol = "openai"
+provider = "gemini"
+base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
+api_key = { env = "GEMINI_API_KEY", prompt = "Введите API-ключ Gemini", secret = true }
+healthcheck = "none"
+connect_timeout = 5.0
+request_timeout = 120.0
+validate_model = false
+    [[arsenal.endpoints.models]]
+    name = "gemini_model"
+    model = { env = "GEMINI_MODEL", prompt = "Введите model ID Gemini", validate = "non_empty" }
+        [[arsenal.endpoints.models.assistants]]
+        name = "assistant"
+
+[[arsenal.endpoints]]
+name = "groq"
+kind = "external"
+protocol = "openai"
+provider = "groq"
+base_url = "https://api.groq.com/openai/v1"
+api_key = { env = "GROQ_API_KEY", prompt = "Введите API-ключ Groq", secret = true }
+healthcheck = "models"
+connect_timeout = 5.0
+request_timeout = 120.0
+validate_model = true
+    [[arsenal.endpoints.models]]
+    name = "groq_model"
+    model = { env = "GROQ_MODEL", prompt = "Введите model ID Groq", validate = "non_empty" }
+        [[arsenal.endpoints.models.assistants]]
+        name = "assistant"
+
+[[arsenal.endpoints]]
+name = "deepseek"
+kind = "external"
+protocol = "openai"
+provider = "deepseek"
+base_url = "https://api.deepseek.com"
+api_key = { env = "DEEPSEEK_API_KEY", prompt = "Введите API-ключ DeepSeek", secret = true }
+healthcheck = "none"
+connect_timeout = 5.0
+request_timeout = 120.0
+validate_model = false
+    [[arsenal.endpoints.models]]
+    name = "deepseek_model"
+    model = { env = "DEEPSEEK_MODEL", prompt = "Введите model ID DeepSeek", validate = "non_empty" }
+        [[arsenal.endpoints.models.assistants]]
+        name = "assistant"
+
+[[arsenal.endpoints]]
+name = "kimi"
+kind = "external"
+protocol = "openai"
+provider = "moonshot"
+base_url = "https://api.moonshot.ai/v1"
+api_key = { env = "MOONSHOT_API_KEY", prompt = "Введите API-ключ Moonshot/Kimi", secret = true }
+healthcheck = "none"
+connect_timeout = 5.0
+request_timeout = 120.0
+validate_model = false
+    [[arsenal.endpoints.models]]
+    name = "kimi_model"
+    model = { env = "MOONSHOT_MODEL", prompt = "Введите model ID Moonshot/Kimi", validate = "non_empty" }
+        [[arsenal.endpoints.models.assistants]]
+        name = "assistant"
+
+[[arsenal.endpoints]]
+name = "xai"
+kind = "external"
+protocol = "openai"
+provider = "xai"
+base_url = "https://api.x.ai/v1"
+api_key = { env = "XAI_API_KEY", prompt = "Введите API-ключ xAI", secret = true }
+healthcheck = "models"
+connect_timeout = 5.0
+request_timeout = 120.0
+validate_model = true
+    [[arsenal.endpoints.models]]
+    name = "xai_model"
+    model = { env = "XAI_MODEL", prompt = "Введите model ID xAI", validate = "non_empty" }
+        [[arsenal.endpoints.models.assistants]]
+        name = "assistant"
+
+[[arsenal.endpoints]]
+name = "mistral"
+kind = "external"
+protocol = "openai"
+provider = "mistral"
+base_url = "https://api.mistral.ai/v1"
+api_key = { env = "MISTRAL_API_KEY", prompt = "Введите API-ключ Mistral", secret = true }
+healthcheck = "models"
+connect_timeout = 5.0
+request_timeout = 120.0
+validate_model = true
+    [[arsenal.endpoints.models]]
+    name = "mistral_model"
+    model = { env = "MISTRAL_MODEL", prompt = "Введите model ID Mistral", validate = "non_empty" }
+        [[arsenal.endpoints.models.assistants]]
+        name = "assistant"

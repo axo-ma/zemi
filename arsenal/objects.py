@@ -34,7 +34,7 @@ class NamedObjects(Generic[_T]):
         self,
         items: list[_T],
         *,
-        on_access: Callable[[_T], None] | None = None,
+        on_access: Callable[[_T], _T | None] | None = None,
     ) -> None:
         self._items = tuple(items)
         self._by_name = {item.name: item for item in items}
@@ -42,7 +42,9 @@ class NamedObjects(Generic[_T]):
 
     def _access(self, item: _T) -> _T:
         if self._on_access is not None:
-            self._on_access(item)
+            replacement = self._on_access(item)
+            if replacement is not None:
+                return replacement
         return item
 
     def _iter_raw(self) -> Iterator[_T]:
@@ -132,6 +134,7 @@ class Model(_ConfigObject):
                             protocol=self._connection.get("protocol", "openai"),
                             provider=self._connection.get("provider", "custom"),
                             headers=self._connection.get("headers"),
+                            exact_base_url=self._connection.get("kind") == "external",
                         ),
                     )
                     for config in configs
@@ -204,7 +207,7 @@ class Endpoint(_ConfigObject):
     def __post_init__(self) -> None:
         connection = {
             key: self.config[key]
-            for key in ("api_key", "request_timeout", "protocol", "provider", "headers")
+            for key in ("api_key", "request_timeout", "protocol", "provider", "headers", "kind")
             if key in self.config
         }
         object.__setattr__(self, "models", NamedObjects([

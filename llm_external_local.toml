@@ -1,0 +1,22 @@
+[arsenal]
+mode = "model"
+
+[[arsenal.endpoints]]
+name = "host_llm"
+kind = "external"
+protocol = "openai"
+provider = "custom"
+authentication = "none"
+base_url = { env = "HOST_LLM_BASE_URL", prompt = "Введите URL локальной модели на хосте", suggested = "http://host.docker.internal:8080/v1", validate = "url" }
+healthcheck = "models"
+connect_timeout = 5.0
+request_timeout = 120.0
+validate_model = true
+
+    [[arsenal.endpoints.models]]
+    name = "host_model"
+    model = { env = "HOST_LLM_MODEL", prompt = "Введите model ID внешнего сервера", validate = "non_empty" }
+    context_window = 32768
+
+        [[arsenal.endpoints.models.assistants]]
+        name = "assistant"

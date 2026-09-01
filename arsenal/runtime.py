@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 import socket
 import subprocess
 import time
@@ -16,6 +17,7 @@ from .. import env, toml
 from .downloads import DownloadError, download_llama, download_model
 from .config import normalize_endpoints, redacted_endpoint
 from .objects import Endpoint, Llama, Model, NamedObjects
+from .secrets import SecretStore
 
 
 __all__ = ["ArsenalSession"]
@@ -38,6 +40,7 @@ class ArsenalSession:
     def __init__(
         self,
         config_path: str | Path | dict[str, Any] | None = None,
+        *, _secret_store_path: Path | None = None,
     ) -> None:
         if config_path is None:
             self.config_path = _DEFAULT_CONFIG_LABEL
@@ -67,6 +70,9 @@ class ArsenalSession:
         if not isinstance(configs, list):
             raise ValueError("arsenal.llamas must be an array of tables")
         endpoint_configs = normalize_endpoints(arsenal_config)
+        self._secret_store = SecretStore(_secret_store_path)
+        self._endpoint_configs = {item["name"]: item for item in endpoint_configs}
+        self._resolved_endpoints: dict[str, Endpoint] = {}
 
         self._active = False
         self._router_mode = self.mode == "router"
@@ -81,7 +87,8 @@ class ArsenalSession:
         legacy_llamas = {llama.name: llama for llama in self.llamas._iter_raw()}
         self._managed_llamas: dict[str, Llama] = {}
         endpoint_items: list[Endpoint] = []
-        for config in endpoint_configs:
+        for source_config in endpoint_configs:
+            config = self._placeholder_config(source_config)
             if config["kind"] == "managed":
                 llama = legacy_llamas.get(config.get("_legacy_name"))
                 if llama is None:
@@ -97,11 +104,40 @@ class ArsenalSession:
             else:
                 callback = self._activate_external
             endpoint_items.append(Endpoint(config, callback))
-        self.endpoints = NamedObjects(endpoint_items)
+        self.endpoints = NamedObjects(endpoint_items, on_access=self._resolve_endpoint)
         self.models = NamedObjects([
             model for endpoint in self.endpoints._iter_raw()
             for model in endpoint.models._iter_raw()
-        ])
+        ], on_access=self._resolve_flat_model)
+
+    @staticmethod
+    def _placeholder_config(source: dict[str, Any]) -> dict[str, Any]:
+        config = deepcopy(source)
+        if isinstance(config.get("base_url"), dict): config["base_url"] = "http://unresolved.invalid"
+        if isinstance(config.get("api_key"), dict): config["api_key"] = ""
+        for model in config["models"]:
+            if isinstance(model.get("model"), dict): model["model"] = model["model"]["env"]
+        return config
+
+    def _resolve_value(self, value: Any) -> Any:
+        return self._secret_store.resolve(value) if isinstance(value, dict) and "env" in value else value
+
+    def _resolve_endpoint(self, endpoint: Endpoint) -> Endpoint:
+        cached = self._resolved_endpoints.get(endpoint.name)
+        if cached is not None: return cached
+        config = deepcopy(self._endpoint_configs[endpoint.name])
+        config["base_url"] = self._resolve_value(config["base_url"])
+        config["api_key"] = self._resolve_value(config["api_key"])
+        for model in config["models"]: model["model"] = self._resolve_value(model["model"])
+        resolved = Endpoint(config, self._activate_external if config["kind"] == "external" else endpoint._on_model_access)
+        self._resolved_endpoints[endpoint.name] = resolved
+        return resolved
+
+    def _resolve_flat_model(self, model: Model) -> Model:
+        for endpoint in self.endpoints._iter_raw():
+            if model.name in endpoint.models.keys():
+                return self._resolve_endpoint(endpoint).models[model.name]
+        return model
 
     def model(self, name: str) -> Model:
         """Return one model by name without activating non-matching models."""
@@ -183,13 +219,14 @@ class ArsenalSession:
     @staticmethod
     def _resolve_zemi_path(value: str | Path) -> Path:
         path = str(value).replace("\\", "/")
-        for prefix, root in (("@comp/", env.path.comp.root), ("@inst/", env.path.inst)):
+        for prefix, root_getter in (("@comp/", lambda: env.path.comp.root),
+                                    ("@inst/", lambda: env.path.inst)):
             if not path.startswith(prefix):
                 continue
             relative = Path(path.removeprefix(prefix))
             if not relative.parts or relative.is_absolute() or ".." in relative.parts:
                 raise ValueError(f"Invalid ZEMI path: {path!r}")
-            return root / relative
+            return root_getter() / relative
         raise ValueError("Path must start with @comp/ or @inst/")
 
     def _begin(
@@ -304,7 +341,7 @@ class ArsenalSession:
               model_name: str | None = None) -> None:
         """Explicitly validate one endpoint/model or every configured endpoint."""
         endpoints = ([self.endpoints[endpoint_name]] if endpoint_name else
-                     list(self.endpoints._iter_raw()))
+                     [self._resolve_endpoint(item) for item in self.endpoints._iter_raw()])
         for endpoint in endpoints:
             models = ([endpoint.models[model_name]] if model_name else
                       list(endpoint.models._iter_raw()))

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from copy import deepcopy
-import os
 import re
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
@@ -11,7 +10,8 @@ from urllib.parse import urlsplit, urlunsplit
 KINDS = {"managed", "external"}
 PROTOCOLS = {"openai", "anthropic"}
 HEALTHCHECKS = {"none", "tcp", "models"}
-_ENV = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+_ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+VALIDATIONS = {"non_empty", "url", "port"}
 
 
 def _text(value: Any, path: str) -> str:
@@ -26,18 +26,32 @@ def _positive(value: Any, path: str) -> float:
     return float(value)
 
 
-def _expand(value: str, path: str, environ: dict[str, str]) -> str:
-    def replace(match: re.Match[str]) -> str:
-        name = match.group(1)
-        resolved = environ.get(name)
-        if not resolved:
-            raise ValueError(f"{path} requires non-empty environment variable {name!r}")
-        return resolved
-    return _ENV.sub(replace, value)
+def _reference(value: Any, path: str, *, secret: bool | None = None,
+               default_validate: str = "non_empty") -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{path} must be an env reference table")
+    unknown = set(value) - {"env", "prompt", "secret", "suggested", "validate"}
+    if unknown: raise ValueError(f"{path} has unsupported fields: {sorted(unknown)}")
+    name = _text(value.get("env"), f"{path}.env")
+    if not _ENV_NAME.fullmatch(name): raise ValueError(f"{path}.env is not a valid name")
+    result = dict(value); result["env"] = name
+    if "prompt" in result: result["prompt"] = _text(result["prompt"], f"{path}.prompt")
+    if "suggested" in result and not isinstance(result["suggested"], (str, int)):
+        raise ValueError(f"{path}.suggested must be a string or integer")
+    rule = result.get("validate", default_validate)
+    if rule not in VALIDATIONS: raise ValueError(f"{path}.validate is unsupported")
+    result["validate"] = rule
+    if secret is True and result.get("secret") is not True:
+        raise ValueError(f"{path} must set secret = true")
+    if secret is False and result.get("secret") is True:
+        raise ValueError(f"{path} must not be secret")
+    if "secret" in result and not isinstance(result["secret"], bool):
+        raise ValueError(f"{path}.secret must be a boolean")
+    return result
 
 
-def _url(value: Any, path: str, environ: dict[str, str]) -> str:
-    resolved = _expand(_text(value, path), path, environ).rstrip("/")
+def _url(value: Any, path: str) -> str:
+    resolved = _text(value, path).rstrip("/")
     parts = urlsplit(resolved)
     if parts.scheme not in {"http", "https"} or not parts.hostname or parts.username or parts.password:
         raise ValueError(f"{path} must be an http(s) URL without credentials")
@@ -55,9 +69,8 @@ def _names(items: list[dict[str, Any]], path: str) -> None:
         seen.add(name)
 
 
-def normalize_endpoints(arsenal: dict[str, Any], *, environ: dict[str, str] | None = None) -> list[dict[str, Any]]:
+def normalize_endpoints(arsenal: dict[str, Any], **_compat: Any) -> list[dict[str, Any]]:
     """Return secret-redacted normalized endpoints from new and legacy config."""
-    env = os.environ if environ is None else environ
     configured = arsenal.get("endpoints", [])
     legacy = arsenal.get("llamas", [])
     if not isinstance(configured, list):
@@ -126,7 +139,10 @@ def normalize_endpoints(arsenal: dict[str, Any], *, environ: dict[str, str] | No
         if kind == "external":
             if "runtime" in endpoint or "artifact" in endpoint:
                 raise ValueError(f"{path}: external endpoint cannot contain runtime or artifact")
-            endpoint["base_url"] = _url(endpoint.get("base_url"), f"{path}.base_url", env)
+            base_url = endpoint.get("base_url")
+            endpoint["base_url"] = (_reference(base_url, f"{path}.base_url", secret=False,
+                                               default_validate="url")
+                                    if isinstance(base_url, dict) else _url(base_url, f"{path}.base_url"))
         else:
             if protocol != "openai":
                 raise ValueError(f"{path}: managed llama.cpp requires protocol = 'openai'")
@@ -143,15 +159,16 @@ def normalize_endpoints(arsenal: dict[str, Any], *, environ: dict[str, str] | No
             runtime["startup_timeout"] = _positive(runtime.get("startup_timeout", 120.0), f"{path}.runtime.startup_timeout")
             endpoint["base_url"] = f"http://{runtime['host']}:{port}"
 
-        key_env = endpoint.pop("api_key_env", None)
-        if key_env is not None:
-            key_env = _text(key_env, f"{path}.api_key_env")
-            api_key = env.get(key_env)
-            if not api_key:
-                raise ValueError(f"{path}.api_key_env requires non-empty environment variable {key_env!r}")
-            endpoint["api_key"] = api_key
-        else:
-            endpoint["api_key"] = "llama.cpp" if kind == "managed" else ""
+        if "api_key_env" in endpoint:
+            raise ValueError(f"{path}.api_key_env is obsolete; use api_key = {{ env = ..., secret = true }}")
+        if kind == "managed": endpoint["api_key"] = "llama.cpp"
+        elif "api_key" in endpoint:
+            endpoint["api_key"] = _reference(endpoint["api_key"], f"{path}.api_key", secret=True)
+            if endpoint.get("authentication", "bearer") != "bearer":
+                raise ValueError(f"{path}.authentication must be 'bearer' with api_key")
+            endpoint["authentication"] = "bearer"
+        elif endpoint.get("authentication") == "none": endpoint["api_key"] = ""
+        else: raise ValueError(f"{path} must define api_key reference or authentication = 'none'")
 
         for mi, model in enumerate(models):
             mpath = f"{path}.models[{mi}]"
@@ -159,7 +176,9 @@ def normalize_endpoints(arsenal: dict[str, Any], *, environ: dict[str, str] | No
             if name in global_models:
                 raise ValueError(f"duplicate global Arsenal model name {name!r}")
             global_models.add(name)
-            model["model"] = _text(model.get("model"), f"{mpath}.model")
+            model_value = model.get("model")
+            model["model"] = (_reference(model_value, f"{mpath}.model", secret=False)
+                              if isinstance(model_value, dict) else _text(model_value, f"{mpath}.model"))
             context = model.get("context_window")
             if context is not None:
                 model["context_window"] = int(_positive(context, f"{mpath}.context_window"))
