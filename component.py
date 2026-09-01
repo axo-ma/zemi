@@ -515,6 +515,20 @@ class ZemiComponent:
             group_playbooks = []
             for local_index, config in enumerate(configs):
                 _playbook_name(config, local_index)
+                config = copy.deepcopy(dict(config))
+                enabled = config.get("enabled", True)
+                if isinstance(enabled, Mapping):
+                    if set(enabled) != {"select"}:
+                        raise ValueError(
+                            f"arsenals[{group_index}].playbooks_params[{local_index}].enabled: "
+                            "select wrapper must contain exactly one mode key"
+                        )
+                    selected, _resolved = _resolve_playbook_params(
+                        {"enabled": enabled},
+                        f"arsenals[{group_index}].playbooks_params[{local_index}]",
+                        config["playbook_name"],
+                    )[0]
+                    config["enabled"] = selected["enabled"]
                 raw = config.get("playbook_params", {})
                 if not isinstance(raw, Mapping):
                     raise ValueError(f"arsenals[{group_index}].playbooks_params[{local_index}].playbook_params must be a table")
@@ -547,14 +561,15 @@ class ZemiComponent:
         from . import arsenal
         from .arsenal import ArsenalSession
         for managed, arsenal_config_path, group_playbooks in self._arsenal_groups:
+            enabled_playbooks = tuple(playbook for playbook in group_playbooks if playbook.enabled)
+            if not enabled_playbooks:
+                continue
             session = None
             try:
                 if managed:
                     session = ArsenalSession(arsenal_config_path)
                     arsenal.begin(session, stop_before_begin=True)
-                for playbook in group_playbooks:
-                    if not playbook.enabled:
-                        continue
+                for playbook in enabled_playbooks:
                     try:
                         playbook.run()
                     except Exception as error:
