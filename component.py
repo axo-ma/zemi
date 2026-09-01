@@ -476,67 +476,101 @@ class ZemiComponent:
         self.stop_on_error = self.component_params.get("stop_on_error", True)
         if not isinstance(self.stop_on_error, bool):
             raise ValueError("component_params.stop_on_error must be boolean")
-        arsenal_params = self.component_params.get("arsenal")
-        if arsenal_params is None:
-            self.arsenal_config_path: str | None = None
-            self.arsenal_start_and_stop_at_job_level = True
-        elif not isinstance(arsenal_params, Mapping):
-            raise ValueError("component_params.arsenal must be a table")
-        else:
-            arsenal_config_path = arsenal_params.get("arsenal_config_path")
-            if not isinstance(arsenal_config_path, str) or not arsenal_config_path:
-                raise ValueError(
-                    "component_params.arsenal.arsenal_config_path must be a "
-                    "non-empty string"
-                )
-            self.arsenal_config_path = arsenal_config_path
-            lifecycle = arsenal_params.get(
-                "arsenal_start_and_stop_at_job_level", True
-            )
-            if not isinstance(lifecycle, bool):
-                raise ValueError(
-                    "component_params.arsenal."
-                    "arsenal_start_and_stop_at_job_level must be boolean"
-                )
-            self.arsenal_start_and_stop_at_job_level = lifecycle
         self.run_directory = env.path.comp.runid
         self.report = ComponentReport(self.name, self.root, self.run_directory, self.params_path.relative_to(self.root).as_posix(), self.pipeline_params)
-        configs = self.params.get("playbooks_params", [])
-        if not isinstance(configs, list):
-            raise ValueError("playbooks_params must be an array of tables")
+        groups = self.params.get("arsenals")
+        if groups is not None and "playbooks_params" in self.params:
+            raise ValueError("Use either arsenals or the legacy top-level playbooks_params, not both")
+        if groups is None:
+            configs = self.params.get("playbooks_params", [])
+            if not isinstance(configs, list):
+                raise ValueError("playbooks_params must be an array of tables")
+            legacy_arsenal = self.component_params.get("arsenal", {})
+            if not isinstance(legacy_arsenal, Mapping):
+                raise ValueError("component_params.arsenal must be a table")
+            groups = [{"name": "default", "arsenal_start_and_stop_at_job_level": bool(legacy_arsenal), "arsenal_config_path": legacy_arsenal.get("arsenal_config_path"), "playbooks_params": configs, "_legacy": True}]
+            self.arsenal_config_path = legacy_arsenal.get("arsenal_config_path")
+        elif not isinstance(groups, list):
+            raise ValueError("arsenals must be an array of tables")
         playbooks = []
-        for config_index, config in enumerate(configs):
-            _playbook_name(config, config_index)
-            raw = config.get("playbook_params", {})
-            if not isinstance(raw, Mapping):
-                raise ValueError(f"playbooks_params[{config_index}].playbook_params must be a table")
-            label = f"playbooks_params[{config_index}].playbook_params"
-            raw, reference_origins = reference_resolver.resolve_table(raw, label)
-            if (
-                self.arsenal_config_path is not None
-                and raw.get("arsenal_config_path") != self.arsenal_config_path
-            ):
-                raise ValueError(
-                    f"{label}.arsenal_config_path must match the shared "
-                    "component_params.arsenal.arsenal_config_path"
-                )
-            for trial_index, (params, resolved) in enumerate(
-                _resolve_playbook_params(raw, label, config["playbook_name"], reference_origins)
-            ):
-                playbooks.append(Playbook(self, config, config_index=config_index, trial_index=trial_index, params=params, resolved_params=resolved))
+        self._arsenal_groups: list[tuple[bool, str | None, tuple[Playbook, ...]]] = []
+        config_index = 0
+        for group_index, group in enumerate(groups):
+            if not isinstance(group, Mapping):
+                raise ValueError(f"arsenals[{group_index}] must be a table")
+            name = group.get("name")
+            if not isinstance(name, str) or not name:
+                raise ValueError(f"arsenals[{group_index}].name must be a non-empty string")
+            managed = group.get("arsenal_start_and_stop_at_job_level")
+            if not isinstance(managed, bool):
+                raise ValueError(f"arsenals[{group_index}].arsenal_start_and_stop_at_job_level must be boolean")
+            arsenal_config_path = group.get("arsenal_config_path")
+            if managed and (not isinstance(arsenal_config_path, str) or not arsenal_config_path):
+                raise ValueError(f"arsenals[{group_index}].arsenal_config_path is required when Arsenal is managed at job level")
+            if arsenal_config_path is not None and (not isinstance(arsenal_config_path, str) or not arsenal_config_path):
+                raise ValueError(f"arsenals[{group_index}].arsenal_config_path must be a non-empty string")
+            configs = group.get("playbooks_params", [])
+            if not isinstance(configs, list):
+                raise ValueError(f"arsenals[{group_index}].playbooks_params must be an array of tables")
+            group_playbooks = []
+            for local_index, config in enumerate(configs):
+                _playbook_name(config, local_index)
+                raw = config.get("playbook_params", {})
+                if not isinstance(raw, Mapping):
+                    raise ValueError(f"arsenals[{group_index}].playbooks_params[{local_index}].playbook_params must be a table")
+                label = f"arsenals[{group_index}].playbooks_params[{local_index}].playbook_params"
+                raw, reference_origins = reference_resolver.resolve_table(raw, label)
+                if group.get("_legacy"):
+                    if arsenal_config_path is not None and raw.get("arsenal_config_path") != arsenal_config_path:
+                        raise ValueError(f"{label}.arsenal_config_path must match the shared component_params.arsenal.arsenal_config_path")
+                elif managed:
+                    for key in ("arsenal_config_path", "arsenal_start_and_stop_at_job_level"):
+                        if key in raw:
+                            raise ValueError(f"{label}.{key} is controlled by its Arsenal group and cannot be overridden")
+                    raw["arsenal_config_path"] = arsenal_config_path
+                    raw["arsenal_start_and_stop_at_job_level"] = True
+                else:
+                    if "arsenal_start_and_stop_at_job_level" in raw:
+                        raise ValueError(f"{label}.arsenal_start_and_stop_at_job_level is controlled by its Arsenal group and cannot be overridden")
+                    raw["arsenal_start_and_stop_at_job_level"] = False
+                    if arsenal_config_path is not None:
+                        raw.setdefault("arsenal_config_path", arsenal_config_path)
+                for trial_index, (params, resolved) in enumerate(_resolve_playbook_params(raw, label, config["playbook_name"], reference_origins)):
+                    playbook = Playbook(self, config, config_index=config_index, trial_index=trial_index, params=params, resolved_params=resolved)
+                    playbooks.append(playbook); group_playbooks.append(playbook)
+                config_index += 1
+            self._arsenal_groups.append((managed, arsenal_config_path, tuple(group_playbooks)))
         self.playbooks = tuple(playbooks); self._closed = False; self.report.save()
 
     def run(self) -> None:
         first_error: BaseException | None = None
-        for playbook in self.playbooks:
-            if not playbook.enabled:
-                continue
+        from . import arsenal
+        from .arsenal import ArsenalSession
+        for managed, arsenal_config_path, group_playbooks in self._arsenal_groups:
+            session = None
             try:
-                playbook.run()
+                if managed:
+                    session = ArsenalSession(arsenal_config_path)
+                    arsenal.begin(session, stop_before_begin=True)
+                for playbook in group_playbooks:
+                    if not playbook.enabled:
+                        continue
+                    try:
+                        playbook.run()
+                    except Exception as error:
+                        first_error = first_error or error; self.report.record_failure(error)
+                        if self.stop_on_error:
+                            break
             except Exception as error:
                 first_error = first_error or error; self.report.record_failure(error)
-                if self.stop_on_error:
-                    raise
+            finally:
+                if session is not None:
+                    try:
+                        arsenal.end(session, stop_after_end=True)
+                    except Exception as error:
+                        first_error = first_error or error; self.report.record_failure(error)
+            if first_error is not None and self.stop_on_error:
+                raise first_error
         if first_error is not None:
             raise first_error
 
