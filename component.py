@@ -479,6 +479,7 @@ class ZemiComponent:
         arsenal_params = self.component_params.get("arsenal")
         if arsenal_params is None:
             self.arsenal_config_path: str | None = None
+            self.arsenal_start_and_stop_at_job_level = True
         elif not isinstance(arsenal_params, Mapping):
             raise ValueError("component_params.arsenal must be a table")
         else:
@@ -489,6 +490,15 @@ class ZemiComponent:
                     "non-empty string"
                 )
             self.arsenal_config_path = arsenal_config_path
+            lifecycle = arsenal_params.get(
+                "arsenal_start_and_stop_at_job_level", True
+            )
+            if not isinstance(lifecycle, bool):
+                raise ValueError(
+                    "component_params.arsenal."
+                    "arsenal_start_and_stop_at_job_level must be boolean"
+                )
+            self.arsenal_start_and_stop_at_job_level = lifecycle
         self.run_directory = env.path.comp.runid
         self.report = ComponentReport(self.name, self.root, self.run_directory, self.params_path.relative_to(self.root).as_posix(), self.pipeline_params)
         configs = self.params.get("playbooks_params", [])
