@@ -9,7 +9,7 @@ from typing import Any, Generic, Iterator, TypeVar, overload
 from .libs import Libs
 
 
-__all__ = ["Assistant", "Llama", "Model", "NamedObjects"]
+__all__ = ["Assistant", "Endpoint", "Llama", "Model", "NamedObjects"]
 
 
 _T = TypeVar("_T")
@@ -104,6 +104,7 @@ class Model(_ConfigObject):
 
     config: dict[str, Any]
     _base_url: str = field(repr=False)
+    _connection: dict[str, Any] = field(default_factory=dict, repr=False)
     _on_access: Callable[[Model], None] | None = field(
         default=None,
         repr=False,
@@ -122,8 +123,15 @@ class Model(_ConfigObject):
                         config,
                         Libs(
                             self._base_url,
-                            model=self.config["alias"],
-                            context_window=self.config["ctx_size"],
+                            model=self.config.get("model", self.config.get("alias")),
+                            context_window=self.config.get(
+                                "context_window", self.config.get("ctx_size")
+                            ),
+                            api_key=self._connection.get("api_key", "llama.cpp"),
+                            timeout=self._connection.get("request_timeout", 60.0),
+                            protocol=self._connection.get("protocol", "openai"),
+                            provider=self._connection.get("provider", "custom"),
+                            headers=self._connection.get("headers"),
                         ),
                     )
                     for config in configs
@@ -163,6 +171,7 @@ class Llama(_ConfigObject):
                     Model(
                         config,
                         base_url,
+                        {},
                         None
                         if self._on_model_access is None
                         else lambda model: self._on_model_access(self, model),
@@ -172,6 +181,38 @@ class Llama(_ConfigObject):
                 on_access=self._activate_model,
             ),
         )
+
+    def _activate_model(self, model: Model) -> None:
+        if self._on_model_access is not None:
+            self._on_model_access(self, model)
+
+    @property
+    def name(self) -> str:
+        return self.config["name"]
+
+
+@dataclass(frozen=True)
+class Endpoint(_ConfigObject):
+    """Managed or external model endpoint."""
+
+    config: dict[str, Any] = field(repr=False)
+    _on_model_access: Callable[[Endpoint, Model], None] | None = field(
+        default=None, repr=False, compare=False
+    )
+    models: NamedObjects[Model] = field(init=False)
+
+    def __post_init__(self) -> None:
+        connection = {
+            key: self.config[key]
+            for key in ("api_key", "request_timeout", "protocol", "provider", "headers")
+            if key in self.config
+        }
+        object.__setattr__(self, "models", NamedObjects([
+            Model(model, self.config["base_url"], connection,
+                  None if self._on_model_access is None else
+                  lambda item: self._on_model_access(self, item))
+            for model in self.config["models"]
+        ], on_access=self._activate_model))
 
     def _activate_model(self, model: Model) -> None:
         if self._on_model_access is not None:

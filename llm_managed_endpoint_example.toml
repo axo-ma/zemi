@@ -1,0 +1,37 @@
+[arsenal]
+mode = "model"
+
+[[arsenal.endpoints]]
+name = "managed_llama"
+kind = "managed"
+protocol = "openai"
+provider = "llama_cpp"
+healthcheck = "models"
+connect_timeout = 5.0
+request_timeout = 120.0
+validate_model = true
+
+    [arsenal.endpoints.runtime]
+    engine = "llama:b10507"
+    host = "127.0.0.1"
+    port = 8080
+    startup_timeout = 120.0
+
+    [[arsenal.endpoints.models]]
+    name = "managed_model"
+    model = "CONFIGURE_LLAMA_MODEL_ALIAS"
+
+        [arsenal.endpoints.models.artifact]
+        source = "hf"
+        owner = "CONFIGURE_HF_OWNER"
+        repository = "CONFIGURE_GGUF_REPOSITORY"
+        filename = "CONFIGURE_MODEL_FILE.gguf"
+
+        [arsenal.endpoints.models.runtime]
+        ctx_size = 32768
+        threads = 8
+        threads_batch = 8
+        reasoning = "off"
+
+        [[arsenal.endpoints.models.assistants]]
+        name = "assistant"

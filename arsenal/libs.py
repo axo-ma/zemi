@@ -20,21 +20,38 @@ if TYPE_CHECKING:
     from llama_index.llms.openai_like import OpenAILike
     from pydantic_ai.models.openai import OpenAIChatModel
 
-__all__ = ["LibDependencyError", "Libs"]
+__all__ = ["ConnectionConfig", "LibDependencyError", "Libs", "UnsupportedProtocolError"]
 
 
 class LibDependencyError(ImportError):
     """The requested integration cannot be created without a Python package."""
 
 
-@dataclass(frozen=True)
-class _Config:
+class UnsupportedProtocolError(NotImplementedError):
+    """The requested client cannot represent the endpoint protocol safely."""
+
+
+@dataclass(frozen=True, repr=False)
+class ConnectionConfig:
+    """Secret-safe transport configuration shared by client integrations."""
+
     server_url: str
     openai_url: str
     model: str | None
     context_window: int | None
     api_key: str
     timeout: float
+    protocol: str = "openai"
+    provider: str = "custom"
+    headers: dict[str, str] | None = None
+
+    def __repr__(self) -> str:
+        return (
+            "ConnectionConfig(server_url={!r}, openai_url={!r}, model={!r}, "
+            "context_window={!r}, api_key=<redacted>, timeout={!r}, "
+            "protocol={!r}, provider={!r})"
+        ).format(self.server_url, self.openai_url, self.model,
+                 self.context_window, self.timeout, self.protocol, self.provider)
 
     def require_model(self) -> str:
         if not self.model:
@@ -45,7 +62,7 @@ class _Config:
 class _Adapter:
     _path = "assistant.clients"
 
-    def __init__(self, config: _Config) -> None:
+    def __init__(self, config: ConnectionConfig) -> None:
         self._config = config
 
     def _module(self, module: str, package: str | None = None) -> Any:
@@ -59,12 +76,25 @@ class _Adapter:
             ) from error
 
 
+class _UnsupportedAdapter:
+    def __init__(self, protocol: str, name: str) -> None:
+        self.protocol, self.name = protocol, name
+
+    def __getattr__(self, _role: str) -> Any:
+        raise UnsupportedProtocolError(
+            f"assistant.clients.{self.name} does not support protocol "
+            f"{self.protocol!r}; native Anthropic clients are a separate next-stage adapter"
+        )
+
+
 class OpenAILib(_Adapter):
     _path = "assistant.clients.openai.client"
     @cached_property
     def client(self) -> "openai.OpenAI":
         module = self._module("openai")
-        return module.OpenAI(base_url=self._config.openai_url, api_key=self._config.api_key, timeout=self._config.timeout)
+        return module.OpenAI(base_url=self._config.openai_url, api_key=self._config.api_key,
+                             timeout=self._config.timeout,
+                             default_headers=self._config.headers)
 
 
 class LiteLLMLib(_Adapter):
@@ -75,6 +105,8 @@ class LiteLLMLib(_Adapter):
         module = self._module("litellm")
         model = self._config.require_model()
         params = {"model": f"openai/{model}", "api_base": self._config.openai_url, "api_key": self._config.api_key, "timeout": self._config.timeout}
+        if self._config.headers:
+            params["extra_headers"] = self._config.headers
         costs = {"input_cost_per_token": 0.0, "output_cost_per_token": 0.0, "cache_creation_input_token_cost": 0.0, "cache_read_input_token_cost": 0.0}
         module.register_model(model_cost={params["model"]: costs})
         return module.Router(model_list=[{"model_name": model, "litellm_params": params, "model_info": costs}])
@@ -85,12 +117,12 @@ class DSPyLib(_Adapter):
     @cached_property
     def model(self) -> "dspy.LM":
         module = self._module("dspy", "dspy-ai")
-        return module.LM(f"openai/{self._config.require_model()}", api_base=self._config.openai_url, api_key=self._config.api_key, timeout=self._config.timeout)
+        return module.LM(f"openai/{self._config.require_model()}", api_base=self._config.openai_url, api_key=self._config.api_key, timeout=self._config.timeout, extra_headers=self._config.headers)
 
 
 class InstructorLib(_Adapter):
     _path = "assistant.clients.instructor.client"
-    def __init__(self, config: _Config, openai: OpenAILib) -> None:
+    def __init__(self, config: ConnectionConfig, openai: OpenAILib) -> None:
         super().__init__(config)
         self._openai = openai
 
@@ -107,7 +139,7 @@ class PydanticAILib(_Adapter):
         provider_module = self._module("pydantic_ai.providers.openai", "pydantic-ai")
         model_module = self._module("pydantic_ai.models.openai", "pydantic-ai")
         openai = self._module("openai")
-        client = openai.AsyncOpenAI(base_url=self._config.openai_url, api_key=self._config.api_key, timeout=self._config.timeout)
+        client = openai.AsyncOpenAI(base_url=self._config.openai_url, api_key=self._config.api_key, timeout=self._config.timeout, default_headers=self._config.headers)
         provider = provider_module.OpenAIProvider(openai_client=client)
         model_type = getattr(model_module, "OpenAIModel", None) or getattr(model_module, "OpenAIChatModel", None)
         if model_type is None:
@@ -136,12 +168,15 @@ class HTTPXLib(_Adapter):
     @cached_property
     def client(self) -> "httpx.Client":
         module = self._module("httpx")
-        return module.Client(base_url=self._config.server_url, timeout=self._config.timeout)
+        headers = dict(self._config.headers or {})
+        if self._config.api_key:
+            headers.setdefault("Authorization", f"Bearer {self._config.api_key}")
+        return module.Client(base_url=self._config.server_url, timeout=self._config.timeout, headers=headers)
 
 
 class OutlinesLib(_Adapter):
     _path = "assistant.clients.outlines.model"
-    def __init__(self, config: _Config, openai: OpenAILib) -> None:
+    def __init__(self, config: ConnectionConfig, openai: OpenAILib) -> None:
         super().__init__(config)
         self._openai = openai
 
@@ -164,7 +199,11 @@ class Libs:
 
     names: Final[tuple[str, ...]] = ("openai", "litellm", "dspy", "instructor", "pydantic_ai", "smolagents", "llama_index", "httpx", "outlines", "guidance")
 
-    def __init__(self, base_url: str, *, model: str | None = None, context_window: int | None = None, api_key: str = "llama.cpp", timeout: float = 60.0) -> None:
+    def __init__(self, base_url: str, *, model: str | None = None,
+                 context_window: int | None = None, api_key: str = "llama.cpp",
+                 timeout: float = 60.0, protocol: str = "openai",
+                 provider: str = "custom",
+                 headers: dict[str, str] | None = None) -> None:
         if not isinstance(base_url, str) or not base_url.strip():
             raise ValueError("base_url must be a non-empty string")
         if timeout <= 0:
@@ -180,7 +219,13 @@ class Libs:
         self.context_window = context_window
         self.api_key = api_key
         self.timeout = timeout
-        config = _Config(server_url, self.openai_url, model, context_window, api_key, timeout)
+        config = ConnectionConfig(server_url, self.openai_url, model,
+                                  context_window, api_key, timeout, protocol,
+                                  provider, headers)
+        if protocol != "openai":
+            for name in self.names:
+                setattr(self, name, _UnsupportedAdapter(protocol, name))
+            return
         self.openai = OpenAILib(config)
         self.litellm = LiteLLMLib(config)
         self.dspy = DSPyLib(config)

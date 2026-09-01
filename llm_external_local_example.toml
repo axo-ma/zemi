@@ -1,0 +1,22 @@
+# Set ZEMI_HOST_LLM_BASE_URL in the ZEMI Instance environment.
+[arsenal]
+mode = "model"
+
+[[arsenal.endpoints]]
+name = "host_llama"
+kind = "external"
+protocol = "openai"
+provider = "custom"
+base_url = "${ZEMI_HOST_LLM_BASE_URL}"
+healthcheck = "models"
+connect_timeout = 5.0
+request_timeout = 120.0
+validate_model = true
+
+    [[arsenal.endpoints.models]]
+    name = "host_model"
+    model = "INSTANCE_CONFIGURED_MODEL_ID"
+    context_window = 32768
+
+        [[arsenal.endpoints.models.assistants]]
+        name = "assistant"

@@ -3,16 +3,19 @@
 from __future__ import annotations
 
 import json
+import socket
 import subprocess
 import time
 from pathlib import Path
 from typing import Any
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 from .. import env, toml
 from .downloads import DownloadError, download_llama, download_model
-from .objects import Llama, Model, NamedObjects
+from .config import normalize_endpoints, redacted_endpoint
+from .objects import Endpoint, Llama, Model, NamedObjects
 
 
 __all__ = ["ArsenalSession"]
@@ -60,14 +63,10 @@ class ArsenalSession:
             )
         self.mode = mode
 
-        try:
-            configs = arsenal_config["llamas"]
-        except KeyError as error:
-            raise ValueError(
-                "TOML must contain the [[arsenal.llamas]] array of tables"
-            ) from error
+        configs = arsenal_config.get("llamas", [])
         if not isinstance(configs, list):
             raise ValueError("arsenal.llamas must be an array of tables")
+        endpoint_configs = normalize_endpoints(arsenal_config)
 
         self._active = False
         self._router_mode = self.mode == "router"
@@ -78,27 +77,41 @@ class ArsenalSession:
         self.llamas = NamedObjects([
             Llama(config, self._activate_model) for config in configs
         ])
+        legacy_llamas = {llama.name: llama for llama in self.llamas._iter_raw()}
+        self._managed_llamas: dict[str, Llama] = {}
+        endpoint_items: list[Endpoint] = []
+        for config in endpoint_configs:
+            if config["kind"] == "managed":
+                llama = legacy_llamas.get(config.get("_legacy_name"))
+                if llama is None:
+                    runtime = config["runtime"]
+                    llama = Llama({
+                        "name": config["name"], "llama_build": runtime["engine"],
+                        "host": runtime["host"], "port": runtime["port"],
+                        "startup_timeout": runtime["startup_timeout"],
+                        "models": config["models"],
+                    }, self._activate_model)
+                self._managed_llamas[config["name"]] = llama
+                callback = lambda _endpoint, model, target=llama: self._activate_model(target, model)
+            else:
+                callback = self._activate_external
+            endpoint_items.append(Endpoint(config, callback))
+        self.endpoints = NamedObjects(endpoint_items)
+        self.models = NamedObjects([
+            model for endpoint in self.endpoints._iter_raw()
+            for model in endpoint.models._iter_raw()
+        ])
 
     def model(self, name: str) -> Model:
         """Return one model by name without activating non-matching models."""
-        matches: list[tuple[Llama, Model]] = []
-        for llama in self.llamas._iter_raw():
-            for model in llama.models._iter_raw():
-                if model.name == name:
-                    matches.append((llama, model))
-        if not matches:
+        try:
+            return self.models[name]
+        except KeyError:
             raise LookupError(f"No Arsenal model named {name!r} was found")
-        if len(matches) > 1:
-            servers = ", ".join(llama.name for llama, _model in matches)
-            raise LookupError(
-                f"Arsenal model name {name!r} is ambiguous across servers: {servers}"
-            )
-        llama, _model = matches[0]
-        return llama.models[name]
 
     def download(self) -> None:
         """Download all llama.cpp builds and models from TOML in advance."""
-        llama_items = list(self.llamas._iter_raw())
+        llama_items = list(self._managed_llamas.values())
         model_count = sum(
             len(llama.models)
             for llama in llama_items
@@ -190,7 +203,7 @@ class ArsenalSession:
         if self.mode == "model":
             invalid = [
                 f"{llama.name} ({len(llama.models)} models)"
-                for llama in self.llamas._iter_raw()
+                for llama in self._managed_llamas.values()
                 if len(llama.models) != 1
             ]
             if invalid:
@@ -205,13 +218,13 @@ class ArsenalSession:
         mode = "ROUTER MODE" if self._router_mode else "MODEL MODE"
         self._print_operation_header(
             f"ARSENAL READY · {mode}",
-            len(self.llamas),
+            len(self.endpoints),
         )
         print("Download and startup are deferred until the model is first accessed.")
-        first_llama = next(self.llamas._iter_raw())
-        first_model = next(first_llama.models._iter_raw())
+        first_endpoint = next(self.endpoints._iter_raw())
+        first_model = next(first_endpoint.models._iter_raw())
         print(
-            f'Example: arsenal.llamas["{first_llama.name}"]'
+            f'Example: arsenal.endpoints["{first_endpoint.name}"]'
             f'.models["{first_model.name}"]'
         )
         print("═" * 78)
@@ -280,6 +293,79 @@ class ArsenalSession:
             raise
 
         print("═" * 78)
+
+    def _activate_external(self, endpoint: Endpoint, model: Model) -> None:
+        """Validate an external endpoint lazily; never take lifecycle ownership."""
+        if self._active:
+            self.check(endpoint.name, model.name)
+
+    def check(self, endpoint_name: str | None = None,
+              model_name: str | None = None) -> None:
+        """Explicitly validate one endpoint/model or every configured endpoint."""
+        endpoints = ([self.endpoints[endpoint_name]] if endpoint_name else
+                     list(self.endpoints._iter_raw()))
+        for endpoint in endpoints:
+            models = ([endpoint.models[model_name]] if model_name else
+                      list(endpoint.models._iter_raw()))
+            self._check_endpoint(endpoint, models)
+
+    validate = check
+
+    def _check_endpoint(self, endpoint: Endpoint, models: list[Model]) -> None:
+        healthcheck = endpoint.healthcheck
+        if healthcheck == "none":
+            return
+        parts = urlsplit(endpoint.config["base_url"])
+        safe_url = endpoint.config["base_url"]
+        try:
+            if healthcheck == "tcp":
+                port = parts.port or (443 if parts.scheme == "https" else 80)
+                with socket.create_connection((parts.hostname, port), endpoint.connect_timeout):
+                    return
+            base = safe_url.rstrip("/")
+            if not base.endswith("/v1"):
+                base += "/v1"
+            headers = dict(endpoint.config.get("headers", {}))
+            if endpoint.config.get("api_key"):
+                headers["Authorization"] = f"Bearer {endpoint.config['api_key']}"
+            request = Request(f"{base}/models", headers=headers)
+            with urlopen(request, timeout=endpoint.connect_timeout) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            if endpoint.validate_model:
+                available = {item.get("id") for item in payload.get("data", [])
+                             if isinstance(item, dict)}
+                for model in models:
+                    if model.config["model"] not in available:
+                        raise LookupError(
+                            f"endpoint {endpoint.name!r} model {model.name!r}: "
+                            f"remote model id {model.config['model']!r} was not found at {safe_url}"
+                        )
+        except LookupError:
+            raise
+        except HTTPError as error:
+            category = "authentication" if error.code in {401, 403} else f"HTTP {error.code}"
+            raise ConnectionError(
+                f"endpoint {endpoint.name!r} at {safe_url}: {category} failed"
+            ) from error
+        except socket.gaierror as error:
+            raise ConnectionError(f"endpoint {endpoint.name!r} at {safe_url}: DNS failed") from error
+        except (TimeoutError, socket.timeout) as error:
+            raise TimeoutError(f"endpoint {endpoint.name!r} at {safe_url}: connection timed out") from error
+        except ConnectionRefusedError as error:
+            raise ConnectionError(f"endpoint {endpoint.name!r} at {safe_url}: connection refused") from error
+        except (URLError, OSError, UnicodeError, json.JSONDecodeError) as error:
+            reason = getattr(error, "reason", error)
+            category = "connection refused" if isinstance(reason, ConnectionRefusedError) else type(reason).__name__
+            raise ConnectionError(
+                f"endpoint {endpoint.name!r} at {safe_url}: {category}"
+            ) from error
+
+    def resolved_config(self) -> dict[str, Any]:
+        """Return normalized diagnostic config with all secrets redacted."""
+        return {"arsenal": {"mode": self.mode, "endpoints": [
+            redacted_endpoint(endpoint.config)
+            for endpoint in self.endpoints._iter_raw()
+        ]}}
         print(f"✓ Model ready: {llama.name}/{model.name}")
         print(f"  Server: http://{llama.host}:{llama.port}")
         print("═" * 78)
@@ -323,7 +409,7 @@ class ArsenalSession:
 
     def _stop_arsenal(self) -> None:
         """Stop running Arsenal resources."""
-        llama_items = list(self.llamas._iter_raw())
+        llama_items = list(self._managed_llamas.values())
         self._print_operation_header("STOP ARSENAL", len(llama_items))
 
         for number, llama in enumerate(llama_items, start=1):
@@ -346,8 +432,6 @@ class ArsenalSession:
                 process.kill()
                 process.wait()
             status = f"✓ stopped · PID {process.pid}"
-        elif self._stop_server_on_port(llama.port):
-            status = "✓ found and stopped"
         else:
             status = "· not running"
         self._running_models.pop(llama.name, None)

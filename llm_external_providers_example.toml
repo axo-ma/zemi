@@ -1,0 +1,43 @@
+# Provider secrets are read only from the named environment variables.
+[arsenal]
+mode = "router"
+
+[[arsenal.endpoints]]
+name = "openrouter"
+kind = "external"
+protocol = "openai"
+provider = "openrouter"
+base_url = "https://openrouter.ai/api/v1"
+api_key_env = "OPENROUTER_API_KEY"
+healthcheck = "models"
+connect_timeout = 5.0
+request_timeout = 120.0
+validate_model = false
+
+    [[arsenal.endpoints.models]]
+    name = "openrouter_model"
+    model = "CONFIGURE_OPENROUTER_MODEL_ID"
+    context_window = 32768
+
+        [[arsenal.endpoints.models.assistants]]
+        name = "assistant"
+
+[[arsenal.endpoints]]
+name = "direct_provider"
+kind = "external"
+protocol = "openai"
+provider = "custom"
+base_url = "${DIRECT_PROVIDER_BASE_URL}"
+api_key_env = "DIRECT_PROVIDER_API_KEY"
+healthcheck = "models"
+connect_timeout = 5.0
+request_timeout = 120.0
+validate_model = false
+
+    [[arsenal.endpoints.models]]
+    name = "direct_model"
+    model = "CONFIGURE_PROVIDER_MODEL_ID"
+    context_window = 32768
+
+        [[arsenal.endpoints.models.assistants]]
+        name = "assistant"
