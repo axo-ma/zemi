@@ -53,8 +53,9 @@ def _reference(value: Any, path: str, *, secret: bool | None = None,
 def _url(value: Any, path: str) -> str:
     resolved = _text(value, path).rstrip("/")
     parts = urlsplit(resolved)
-    if parts.scheme not in {"http", "https"} or not parts.hostname or parts.username or parts.password:
-        raise ValueError(f"{path} must be an http(s) URL without credentials")
+    if (parts.scheme not in {"http", "https"} or not parts.hostname or
+            parts.username or parts.password or parts.query or parts.fragment):
+        raise ValueError(f"{path} must be an http(s) URL without credentials, query, or fragment")
     return urlunsplit((parts.scheme, parts.netloc, parts.path.rstrip("/"), "", ""))
 
 

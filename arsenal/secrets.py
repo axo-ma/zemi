@@ -85,7 +85,10 @@ class SecretStore:
     def valid(value: str, rule: str) -> bool:
         if rule == "non_empty": return bool(value.strip())
         if rule == "url":
-            parts = urlsplit(value.strip()); return parts.scheme in {"http", "https"} and bool(parts.hostname) and not parts.username
+            parts = urlsplit(value.strip())
+            return (parts.scheme in {"http", "https"} and bool(parts.hostname)
+                    and not parts.username and not parts.password
+                    and not parts.query and not parts.fragment)
         if rule == "port": return value.isdigit() and 1 <= int(value) <= 65535
         raise ArsenalEnvError(f"unsupported validation rule {rule!r}")
 
