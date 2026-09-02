@@ -465,8 +465,23 @@ class ZemiComponent:
         self.root = env.path.comp.root; self.params_path = _select_params_path(self.root, params_file)
         with self.params_path.open("rb") as file:
             self.params = tomllib.load(file)
+        pipeline_resolver = _ParamReferenceResolver(self.params)
+        raw_pipeline, pipeline_origins = pipeline_resolver.resolve_table(
+            _params_table(self.params, "pipeline_params"),
+            "pipeline_params",
+        )
+        pipeline_variants = _resolve_playbook_params(
+            raw_pipeline,
+            "pipeline_params",
+            "component",
+            pipeline_origins,
+        )
+        if len(pipeline_variants) != 1:
+            raise ValueError("pipeline_params must not use each")
+        self.pipeline_params = pipeline_variants[0][0]
+        self.params["pipeline_params"] = copy.deepcopy(self.pipeline_params)
         reference_resolver = _ParamReferenceResolver(self.params)
-        self.pipeline_params = _params_table(self.params, "pipeline_params"); self.component_params = _params_table(self.params, "component_params")
+        self.component_params = _params_table(self.params, "component_params")
         configured_name = self.component_params.get("component_name")
         if configured_name is None:
             self.name = self.root.name
