@@ -115,7 +115,7 @@ def _json_value(value: Any, label: str) -> Any:
 class _ParamReferenceResolver:
     """Resolve ref wrappers and table includes against one loaded TOML document."""
 
-    _WRAPPER_KEYS = {"ref", "each", "select"}
+    _WRAPPER_KEYS = {"ref", "each", "select", "input"}
 
     def __init__(self, document: Mapping[str, Any]) -> None:
         self.document = document
@@ -234,12 +234,17 @@ def _resolve_playbook_params(
     axes: list[tuple[str, list[Any]]] = []
     resolved: dict[str, dict[str, Any]] = copy.deepcopy(dict(reference_origins or {}))
     for name, value in params.items():
-        wrapper_keys = set(value) & {"each", "select"} if isinstance(value, Mapping) else set()
+        wrapper_keys = set(value) & {"each", "select", "input"} if isinstance(value, Mapping) else set()
         if wrapper_keys:
             if len(wrapper_keys) != 1 or set(value) != wrapper_keys:
-                mode = "each/select" if len(wrapper_keys) > 1 else next(iter(wrapper_keys))
+                mode = "/".join(sorted(wrapper_keys)) if len(wrapper_keys) > 1 else next(iter(wrapper_keys))
                 raise ValueError(f"{label}.{name}: {mode} wrapper must contain exactly one mode key")
             mode = next(iter(wrapper_keys))
+            if mode == "input":
+                selected = _resolve_input(value, f"{label}.{name}", playbook_name)
+                literal[name] = selected
+                resolved[name] = {"source": "input", "value": copy.deepcopy(selected)}
+                continue
             choices = value[mode]
             if not isinstance(choices, list):
                 raise ValueError(f"{label}.{name}.{mode} must be an array")
@@ -264,7 +269,11 @@ def _resolve_playbook_params(
                 raise ValueError(
                     f"Invalid selection {answer!r} for playbook {playbook_name!r}, parameter {name!r}; expected a number from 1 to {len(normalized)}"
                 )
-            selected = copy.deepcopy(normalized[int(answer) - 1])
+            selected = _resolve_nested_inputs(
+                copy.deepcopy(normalized[int(answer) - 1]),
+                f"{label}.{name}.select[{int(answer) - 1}]",
+                playbook_name,
+            )
             literal[name] = selected
             metadata = {"source": "select", "value": copy.deepcopy(selected)}
             if name in resolved and resolved[name].get("refs"):
@@ -287,6 +296,66 @@ def _resolve_playbook_params(
             origins[name] = metadata
         expanded.append((trial, origins))
     return expanded
+
+
+def _resolve_nested_inputs(value: Any, label: str, playbook_name: str) -> Any:
+    if isinstance(value, Mapping):
+        if "input" in value:
+            if set(value) != {"input"}:
+                raise ValueError(f"{label}: input wrapper must contain exactly one key 'input'")
+            return _resolve_input(value, label, playbook_name)
+        return {
+            key: _resolve_nested_inputs(item, f"{label}.{key}", playbook_name)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [
+            _resolve_nested_inputs(item, f"{label}[{index}]", playbook_name)
+            for index, item in enumerate(value)
+        ]
+    return value
+
+
+def _resolve_input(wrapper: Mapping[str, Any], label: str, playbook_name: str) -> Any:
+    specification = wrapper["input"]
+    if isinstance(specification, str):
+        specification = {"prompt": specification}
+    if not isinstance(specification, Mapping):
+        raise ValueError(f"{label}.input must be a prompt string or a table")
+    allowed = {"prompt", "type", "default"}
+    unexpected = set(specification) - allowed
+    if unexpected:
+        raise ValueError(f"{label}.input contains unsupported keys: {', '.join(sorted(unexpected))}")
+    prompt = specification.get("prompt", "Enter a value")
+    value_type = specification.get("type", "string")
+    if not isinstance(prompt, str) or not prompt:
+        raise ValueError(f"{label}.input.prompt must be a non-empty string")
+    if value_type not in {"string", "path", "integer", "float", "boolean", "json"}:
+        raise ValueError(f"{label}.input.type must be string, path, integer, float, boolean, or json")
+    suffix = f" [{specification['default']}]" if "default" in specification else ""
+    try:
+        answer = input(f"{prompt}{suffix}: ")
+    except EOFError:
+        raise RuntimeError(
+            f"Cannot input a value for playbook {playbook_name!r} at {label}: interactive input is unavailable"
+        ) from None
+    if not answer and "default" in specification:
+        return _json_value(specification["default"], f"{label}.input.default")
+    try:
+        if value_type in {"string", "path"}:
+            return answer
+        if value_type == "integer":
+            return int(answer)
+        if value_type == "float":
+            return _json_value(float(answer), label)
+        if value_type == "boolean":
+            normalized = answer.strip().casefold()
+            if normalized not in {"true", "false"}:
+                raise ValueError("expected true or false")
+            return normalized == "true"
+        return _json_value(json.loads(answer), label)
+    except ValueError as error:
+        raise ValueError(f"Invalid {value_type} input for {label}: {answer!r} ({error})") from error
 
 
 def _trial_id(name: str, config_index: int, trial_index: int) -> str:
@@ -322,7 +391,7 @@ class ComponentReport:
         self.data: dict[str, Any] = {"schema_version": 1, "component_name": component_name, "component_root": str(component_root), "params_file": params_file, "pipeline_params": copy.deepcopy(dict(pipeline_params)), "started_at": _timestamp(), "finished_at": None, "status": "running", "trials": trials, "playbooks": trials, "summary": {}}
 
     def start_trial(self, playbook: "Playbook") -> dict[str, Any]:
-        entry = {"trial_id": playbook.trial_id, "playbook_name": playbook.playbook_name, "input_params": copy.deepcopy(playbook.params), "resolved_params": copy.deepcopy(playbook.resolved_params), "output_params": {}, "output_notebook": playbook.output_relative.as_posix(), "output_path": playbook.output_relative.as_posix(), "started_at": _timestamp(), "finished_at": None, "duration_seconds": None, "status": "running", "error": None}
+        entry = {"trial_id": playbook.trial_id, "playbook_name": playbook.playbook_name, "input_params": copy.deepcopy(playbook.params), "resolved_params": copy.deepcopy(playbook.resolved_params), "output_params": {}, "output_notebook": playbook.output_relative.as_posix(), "output_html": playbook.output_html_relative.as_posix(), "output_path": playbook.output_relative.as_posix(), "started_at": _timestamp(), "finished_at": None, "duration_seconds": None, "status": "running", "error": None}
         self.data["trials"].append(entry)
         self.save()
         return entry
@@ -376,6 +445,8 @@ class Playbook:
         self.trial_id = _trial_id(self.playbook_name, config_index, trial_index)
         self.output_relative = Path("notebooks") / f"{self.trial_id}.ipynb"
         self.output_path = component.run_directory / self.output_relative
+        self.output_html_relative = self.output_relative.with_suffix(".html")
+        self.output_html_path = component.run_directory / self.output_html_relative
 
     def run(self) -> None:
         import papermill
@@ -386,6 +457,7 @@ class Playbook:
                 papermill.execute_notebook(str(self.source_path), str(self.output_path), parameters=copy.deepcopy(self.params), cwd=str(self.component.root), progress_bar=True, log_output=False, stdout_file=sys.stdout, stderr_file=sys.stderr)
             entry["output_params"] = self._extract_output_params()
             entry["timed_cells"] = self._add_cell_timings()
+            self._write_html()
         except Exception as error:
             duration = time.monotonic() - started
             if self.output_path.is_file():
@@ -398,6 +470,10 @@ class Playbook:
                 entry["timed_cells"] = self._add_cell_timings()
             except Exception as timing_error:
                 entry["timing_error"] = _error_data(timing_error)
+            try:
+                self._write_html()
+            except Exception as html_error:
+                entry["html_error"] = _error_data(html_error)
             entry["duration_seconds"] = duration
             self.component.report.fail_playbook(entry, error); self.component.report.save(); self._print_failure(error, duration)
             raise
@@ -456,6 +532,26 @@ class Playbook:
             note.metadata["zemi"] = {"source_cell_id": cell.get("id"), "duration_seconds": duration}
             cells.append(note); count += 1
         notebook.cells = cells; nbformat.write(notebook, self.output_path); return count
+
+    def _write_html(self) -> None:
+        if not self.output_path.is_file():
+            return
+        import nbconvert
+        from nbconvert import HTMLExporter
+        package_path = Path(nbconvert.__file__).resolve()
+        template_root = next(
+            (
+                parent / "share" / "jupyter" / "nbconvert" / "templates"
+                for parent in package_path.parents
+                if (parent / "share" / "jupyter" / "nbconvert" / "templates" / "lab").is_dir()
+            ),
+            None,
+        )
+        options = {} if template_root is None else {"extra_template_basedirs": [str(template_root)], "extra_template_paths": [str(template_root)]}
+        body, _resources = HTMLExporter(**options).from_filename(str(self.output_path))
+        temporary = self.output_html_path.with_name(f".{self.output_html_path.name}.tmp")
+        temporary.write_text(body, encoding="utf-8")
+        os.replace(temporary, self.output_html_path)
 
 
 class ZemiComponent:
@@ -634,7 +730,7 @@ def _report_html(data: Mapping[str, Any]) -> str:
 const report=JSON.parse(document.getElementById('report-data').textContent),trials=report.trials||report.playbooks||[];const text=(tag,v)=>{{const n=document.createElement(tag);n.textContent=v;return n}},json=v=>JSON.stringify(v,null,2),scalar=v=>v===null||['string','number','boolean'].includes(typeof v);
 const counts={{total:trials.length,succeeded:trials.filter(x=>x.status==='succeeded').length,failed:trials.filter(x=>x.status==='failed').length}};document.querySelector('#overview div').append(text('pre',json({{component_name:report.component_name,params_file:report.params_file,status:report.status,started_at:report.started_at,finished_at:report.finished_at,counts}})));document.querySelector('#summary div').append(text('pre',json(report.summary||[])));
 const serviceParams=new Set(['arsenal_config_path','arsenal_start_and_stop_at_job_level']),ins=[...new Set(trials.flatMap(t=>Object.keys(t.input_params||{{}}).filter(k=>!serviceParams.has(k)&&scalar(t.input_params[k]))))].sort(),outs=[...new Set(trials.flatMap(t=>Object.keys(t.output_params||{{}}).filter(k=>scalar(t.output_params[k]))))].sort(),cols=['trial_id',...ins.map(k=>'in:'+k),...outs.map(k=>'out:'+k),'status','duration_seconds'];let sort='trial_id',asc=true;const val=(t,k)=>k.startsWith('in:')?(t.input_params||{{}})[k.slice(3)]:k.startsWith('out:')?(t.output_params||{{}})[k.slice(4)]:t[k];
-function render(){{let q=document.getElementById('search').value.toLowerCase(),p=document.getElementById('playbook-filter').value,s=document.getElementById('status-filter').value,pk=document.getElementById('parameter-filter').value,pv=document.getElementById('parameter-value').value.toLowerCase(),rows=trials.filter(t=>(!p||t.playbook_name===p)&&(!s||t.status===s)&&(!q||json(t).toLowerCase().includes(q))&&(!pk||!pv||String(val(t,pk)??'').toLowerCase().includes(pv)));rows.sort((a,b)=>String(val(a,sort)??'').localeCompare(String(val(b,sort)??''),undefined,{{numeric:true}})*(asc?1:-1));const table=document.createElement('table'),head=document.createElement('tr');cols.forEach(k=>{{const th=text('th',k);th.className='col-'+k.replace(':','-');th.title=k;th.onclick=()=>{{asc=sort===k?!asc:true;sort=k;render()}};head.append(th)}});table.append(head);rows.forEach(t=>{{const tr=document.createElement('tr');cols.forEach(k=>{{const td=document.createElement('td'),v=val(t,k),display=String(v??'');td.className='col-'+k.replace(':','-');if(k==='trial_id'&&(t.output_notebook||t.output_path)){{const a=text('a',display);a.href=t.output_notebook||t.output_path;a.title=display;td.append(a)}}else{{const span=text('span',display);span.className='cell-value';span.title=display;td.append(span)}}tr.append(td)}});table.append(tr)}});document.querySelector('#runs div:last-child').replaceChildren(table)}}
+function render(){{let q=document.getElementById('search').value.toLowerCase(),p=document.getElementById('playbook-filter').value,s=document.getElementById('status-filter').value,pk=document.getElementById('parameter-filter').value,pv=document.getElementById('parameter-value').value.toLowerCase(),rows=trials.filter(t=>(!p||t.playbook_name===p)&&(!s||t.status===s)&&(!q||json(t).toLowerCase().includes(q))&&(!pk||!pv||String(val(t,pk)??'').toLowerCase().includes(pv)));rows.sort((a,b)=>String(val(a,sort)??'').localeCompare(String(val(b,sort)??''),undefined,{{numeric:true}})*(asc?1:-1));const table=document.createElement('table'),head=document.createElement('tr');cols.forEach(k=>{{const th=text('th',k);th.className='col-'+k.replace(':','-');th.title=k;th.onclick=()=>{{asc=sort===k?!asc:true;sort=k;render()}};head.append(th)}});table.append(head);rows.forEach(t=>{{const tr=document.createElement('tr');cols.forEach(k=>{{const td=document.createElement('td'),v=val(t,k),display=String(v??'');td.className='col-'+k.replace(':','-');if(k==='trial_id'&&(t.output_html||t.output_notebook||t.output_path)){{const a=text('a',display);a.href=t.output_html||t.output_notebook||t.output_path;a.title=display;td.append(a)}}else{{const span=text('span',display);span.className='cell-value';span.title=display;td.append(span)}}tr.append(td)}});table.append(tr)}});document.querySelector('#runs div:last-child').replaceChildren(table)}}
 for(const p of [...new Set(trials.map(t=>t.playbook_name))].sort()){{const o=text('option',p);o.value=p;document.getElementById('playbook-filter').append(o)}}for(const s of [...new Set(trials.map(t=>t.status))].sort()){{const o=text('option',s);o.value=s;document.getElementById('status-filter').append(o)}}for(const k of [...ins.map(k=>'in:'+k),...outs.map(k=>'out:'+k)]){{const o=text('option',k);o.value=k;document.getElementById('parameter-filter').append(o)}}['search','playbook-filter','status-filter','parameter-filter','parameter-value'].forEach(id=>document.getElementById(id).addEventListener('input',render));render();
 const details=document.querySelector('#run-details div');trials.forEach(t=>{{const block=document.createElement('article');block.append(text('h3',t.trial_id||'Trial'));block.append(text('pre',json({{playbook_name:t.playbook_name,status:t.status,input_params:t.input_params||{{}},output_params:t.output_params||{{}},error:t.error||null}})));details.append(block)}});const errors=trials.filter(t=>t.status==='failed');document.querySelector('#errors div').append(text(errors.length?'pre':'p',errors.length?json(errors.map(t=>({{trial_id:t.trial_id,error:t.error}}))):'No errors.'));
 </script></main></body></html>'''
