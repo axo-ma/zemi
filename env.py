@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import os
 from pathlib import Path
 
 
@@ -8,6 +9,7 @@ INSTANCE_MARKERS = frozenset(
     {".zemiinst_dev", ".zemiinst_exp", ".zemiinst_prod"}
 )
 COMPONENT_MARKER = ".zemicomp"
+_PLAYBOOK_OUTPUT_DIR_ENV = "ZEMI_PLAYBOOK_OUTPUT_DIR"
 
 
 def _path_part(value: str, name: str) -> str:
@@ -41,11 +43,28 @@ class _ComponentPaths:
 
     @property
     def runid(self) -> Path:
-        """Create and cache this process's local component run directory."""
+        """Return the runner-owned run directory or create one for this process."""
+        parent = (self.root / ".tmp").resolve()
+        configured = os.environ.get(_PLAYBOOK_OUTPUT_DIR_ENV)
+        if configured is not None:
+            candidate = Path(configured)
+            if not candidate.is_absolute():
+                raise RuntimeError(
+                    f"{_PLAYBOOK_OUTPUT_DIR_ENV} must be an absolute path"
+                )
+            candidate = candidate.resolve()
+            if candidate.parent != parent:
+                raise RuntimeError(
+                    f"{_PLAYBOOK_OUTPUT_DIR_ENV} must identify a run directory "
+                    f"directly inside {parent}"
+                )
+            candidate.mkdir(parents=True, exist_ok=True)
+            self._runid = candidate
+            return candidate
+
         if self._runid is not None:
             return self._runid
 
-        parent = self.root / ".tmp"
         parent.mkdir(parents=True, exist_ok=True)
         base_name = datetime.now().strftime("run%y%m%d-%H%M%S")
         candidate = parent / base_name
