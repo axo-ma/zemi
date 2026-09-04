@@ -387,7 +387,7 @@ class ComponentReport:
 
     def __init__(self, component_name: str, component_root: Path, run_directory: Path, params_file: str, pipeline_params: Mapping[str, Any]) -> None:
         self.path = run_directory / "report.json"
-        self.html_path = run_directory / "report.html"
+        self.main_path = run_directory / "main.md"
         self.markdown_path = run_directory / "report.md"
         self.run_directory = run_directory
         trials: list[dict[str, Any]] = []
@@ -420,9 +420,9 @@ class ComponentReport:
         json_tmp = self.path.with_name(".report.json.tmp")
         json_tmp.write_text(json.dumps(self.data, ensure_ascii=False, indent=2, allow_nan=False) + "\n", encoding="utf-8")
         os.replace(json_tmp, self.path)
-        html_tmp = self.html_path.with_name(".report.html.tmp")
-        html_tmp.write_text(_report_html(self.data), encoding="utf-8")
-        os.replace(html_tmp, self.html_path)
+        main_tmp = self.main_path.with_name(".main.md.tmp")
+        main_tmp.write_text(_main_markdown(self.data), encoding="utf-8")
+        os.replace(main_tmp, self.main_path)
         markdown_tmp = self.markdown_path.with_name(".report.md.tmp")
         markdown_tmp.write_text(_report_markdown(self.data), encoding="utf-8")
         os.replace(markdown_tmp, self.markdown_path)
@@ -802,11 +802,93 @@ def _trial_markdown(trial: Mapping[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _markdown_cell(value: Any) -> str:
+    displayed = _display_value(value).replace("\r\n", "\n").replace("\r", "\n")
+    return displayed.replace("|", "\\|").replace("\n", "<br>")
+
+
+def _markdown_link(label: str, target: object) -> str:
+    return f"[{label}]({str(target).replace(' ', '%20')})"
+
+
+def _main_markdown(data: Mapping[str, Any]) -> str:
+    trials = data.get("trials") or data.get("playbooks") or []
+    lines = [
+        "# ZEMI job report",
+        "",
+        "## Overview",
+        "",
+        "| Property | Value |",
+        "|---|---|",
+    ]
+    overview = (
+        ("Component", data.get("component_name")),
+        ("Parameters", data.get("params_file")),
+        ("Status", data.get("status")),
+        ("Started", data.get("started_at")),
+        ("Finished", data.get("finished_at")),
+    )
+    lines.extend(f"| {name} | {_markdown_cell(value)} |" for name, value in overview)
+    input_names = sorted({
+        name
+        for trial in trials
+        for name, value in trial.get("input_params", {}).items()
+        if name not in _SERVICE_INPUT_PARAMS and isinstance(value, (str, int, float, bool))
+    })
+    headers = ["Run", *(_human_label(name) for name in input_names), "Outputs", "Status", "Duration"]
+    lines.extend(("", "## Runs", "", "| " + " | ".join(headers) + " |", "|" + "---|" * len(headers)))
+    for trial in trials:
+        trial_id = str(trial.get("trial_id") or trial.get("playbook_name") or "Trial")
+        notebook_target = trial.get("output_html") or trial.get("output_notebook") or trial.get("output_path")
+        run_cell = _markdown_link(trial_id, notebook_target) if notebook_target else trial_id
+        values = [run_cell]
+        values.extend(_markdown_cell(trial.get("input_params", {}).get(name, "")) for name in input_names)
+        output_target = trial.get("output_markdown")
+        values.append(_markdown_link("Open outputs", output_target) if output_target else "")
+        values.append(_markdown_cell(trial.get("status", "")))
+        duration = trial.get("duration_seconds")
+        values.append(_format_duration(duration) if isinstance(duration, (int, float)) else "")
+        lines.append("| " + " | ".join(values) + " |")
+    if not trials:
+        lines.append("| _No runs_ |" + " |" * (len(headers) - 1))
+    counts = data.get("summary", {}).get("counts", {})
+    lines.extend((
+        "",
+        "## Summary",
+        "",
+        "[Open consolidated outputs](report.md)",
+        "",
+        "| Total | Succeeded | Failed | Running |",
+        "|---:|---:|---:|---:|",
+        f"| {counts.get('total', 0)} | {counts.get('succeeded', 0)} | {counts.get('failed', 0)} | {counts.get('running', 0)} |",
+        "",
+        "## Run details",
+        "",
+    ))
+    for trial in trials:
+        summary = html.escape(_trial_summary_text(trial))
+        lines.extend(("<details>", f"<summary>{summary}</summary>", ""))
+        lines.append(f"- Playbook: `{trial.get('playbook_name', '')}`")
+        if trial.get("output_markdown"):
+            lines.append(f"- Outputs: {_markdown_link('open report', trial['output_markdown'])}")
+        if trial.get("resolved_params"):
+            lines.extend(("", "```json", _display_value(trial["resolved_params"]), "```"))
+        lines.extend(("", "</details>", ""))
+    errors = [trial for trial in trials if trial.get("status") == "failed"]
+    lines.extend(("## Errors", ""))
+    if not errors:
+        lines.extend(("No errors.", ""))
+    else:
+        for trial in errors:
+            lines.extend((f"### {trial.get('trial_id', 'Trial')}", "", "```json", _display_value(trial.get("error")), "```", ""))
+    return "\n".join(lines)
+
+
 def _report_markdown(data: Mapping[str, Any]) -> str:
     lines = [
         f"# {html.escape(str(data.get('component_name', 'ZEMI')))} outputs",
         "",
-        "[Open HTML job report](report.html)",
+        "[Open main job report](main.md)",
         "",
     ]
     trials = data.get("trials") or data.get("playbooks") or []
@@ -820,23 +902,6 @@ def _report_markdown(data: Mapping[str, Any]) -> str:
             lines.extend((f"[Open individual output report]({target})", ""))
         lines.extend((_output_markdown_table(trial.get("output_params", {})), "", "</details>", ""))
     return "\n".join(lines)
-def _report_html(data: Mapping[str, Any]) -> str:
-    embedded = json.dumps(data, ensure_ascii=False, allow_nan=False).replace("<", "\\u003c")
-    return f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ZEMI job report</title><style>
-:root{{--bg:#f6f7fb;--card:#fff;--ink:#172033;--muted:#667085;--line:#d9deea}}*{{box-sizing:border-box}}body{{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,sans-serif}}main{{max-width:1500px;margin:auto;padding:24px}}section{{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px;margin:16px 0;overflow:auto}}h1,h2{{margin:0 0 14px}}.controls{{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px}}input,select{{padding:8px;border:1px solid var(--line);border-radius:6px}}table{{border-collapse:collapse;width:auto;min-width:100%;table-layout:auto}}th,td{{border-bottom:1px solid var(--line);padding:6px;text-align:left;vertical-align:top;max-width:16rem}}th{{cursor:pointer;max-width:10rem;overflow-wrap:anywhere}}td{{overflow-wrap:anywhere}}.cell-value{{display:block;max-width:16rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}.col-trial_id,.col-status,.col-duration_seconds{{white-space:nowrap;width:1%}}.col-trial_id a{{display:block;max-width:14rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}pre{{white-space:pre-wrap;word-break:break-word}}</style></head><body><main><h1>ZEMI job report</h1>
-<section id="overview"><h2>Overview</h2><div></div></section>
-<section id="runs"><h2>Runs</h2><div class="controls"><input id="search" placeholder="Search all values"><select id="playbook-filter"><option value="">All playbooks</option></select><select id="status-filter"><option value="">All statuses</option></select><select id="parameter-filter"><option value="">Any parameter</option></select><input id="parameter-value" placeholder="Parameter value contains"></div><div></div></section>
-<section id="summary"><h2>Summary</h2><p><a href="report.md">Open Markdown output summary</a></p><div></div></section>
-<section id="run-details"><h2>Run details</h2><div></div></section><section id="errors"><h2>Errors</h2><div></div></section>
-<script id="report-data" type="application/json">{embedded}</script><script>
-const report=JSON.parse(document.getElementById('report-data').textContent),trials=report.trials||report.playbooks||[];const text=(tag,v)=>{{const n=document.createElement(tag);n.textContent=v;return n}},json=v=>JSON.stringify(v,null,2),scalar=v=>v===null||['string','number','boolean'].includes(typeof v);
-const counts={{total:trials.length,succeeded:trials.filter(x=>x.status==='succeeded').length,failed:trials.filter(x=>x.status==='failed').length}};document.querySelector('#overview div').append(text('pre',json({{component_name:report.component_name,params_file:report.params_file,status:report.status,started_at:report.started_at,finished_at:report.finished_at,counts}})));document.querySelector('#summary div').append(text('pre',json(report.summary||[])));
-const serviceParams=new Set(['arsenal_config_path','arsenal_start_and_stop_at_job_level']),ins=[...new Set(trials.flatMap(t=>Object.keys(t.input_params||{{}}).filter(k=>!serviceParams.has(k)&&scalar(t.input_params[k]))))].sort(),cols=['trial_id',...ins.map(k=>'in:'+k),'output_report','status','duration_seconds'];let sort='trial_id',asc=true;const val=(t,k)=>k.startsWith('in:')?(t.input_params||{{}})[k.slice(3)]:k==='output_report'?t.output_markdown:t[k];
-function render(){{let q=document.getElementById('search').value.toLowerCase(),p=document.getElementById('playbook-filter').value,s=document.getElementById('status-filter').value,pk=document.getElementById('parameter-filter').value,pv=document.getElementById('parameter-value').value.toLowerCase(),rows=trials.filter(t=>(!p||t.playbook_name===p)&&(!s||t.status===s)&&(!q||json(t).toLowerCase().includes(q))&&(!pk||!pv||String(val(t,pk)??'').toLowerCase().includes(pv)));rows.sort((a,b)=>String(val(a,sort)??'').localeCompare(String(val(b,sort)??''),undefined,{{numeric:true}})*(asc?1:-1));const table=document.createElement('table'),head=document.createElement('tr');cols.forEach(k=>{{const th=text('th',k);th.className='col-'+k.replace(':','-');th.title=k;th.onclick=()=>{{asc=sort===k?!asc:true;sort=k;render()}};head.append(th)}});table.append(head);rows.forEach(t=>{{const tr=document.createElement('tr');cols.forEach(k=>{{const td=document.createElement('td'),v=val(t,k),display=String(v??'');td.className='col-'+k.replace(':','-');if(k==='trial_id'&&(t.output_html||t.output_notebook||t.output_path)){{const a=text('a',display);a.href=t.output_html||t.output_notebook||t.output_path;a.title=display;td.append(a)}}else if(k==='output_report'&&v){{const a=text('a','Open outputs');a.href=v;td.append(a)}}else{{const span=text('span',display);span.className='cell-value';span.title=display;td.append(span)}}tr.append(td)}});table.append(tr)}});document.querySelector('#runs div:last-child').replaceChildren(table)}}
-for(const p of [...new Set(trials.map(t=>t.playbook_name))].sort()){{const o=text('option',p);o.value=p;document.getElementById('playbook-filter').append(o)}}for(const s of [...new Set(trials.map(t=>t.status))].sort()){{const o=text('option',s);o.value=s;document.getElementById('status-filter').append(o)}}for(const k of [...ins.map(k=>'in:'+k)]){{const o=text('option',k);o.value=k;document.getElementById('parameter-filter').append(o)}}['search','playbook-filter','status-filter','parameter-filter','parameter-value'].forEach(id=>document.getElementById(id).addEventListener('input',render));render();
-const details=document.querySelector('#run-details div');trials.forEach(t=>{{const block=document.createElement('article');block.append(text('h3',t.trial_id||'Trial'));block.append(text('pre',json({{playbook_name:t.playbook_name,status:t.status,input_params:t.input_params||{{}},output_report:t.output_markdown||null,error:t.error||null}})));details.append(block)}});const errors=trials.filter(t=>t.status==='failed');document.querySelector('#errors div').append(text(errors.length?'pre':'p',errors.length?json(errors.map(t=>({{trial_id:t.trial_id,error:t.error}}))):'No errors.'));
-</script></main></body></html>'''
-
 
 def _params_table(params: Mapping[str, Any], name: str) -> dict[str, Any]:
     value = params.get(name, {})
