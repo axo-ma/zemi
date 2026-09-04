@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import html
 import itertools
 import json
 import os
@@ -382,16 +383,18 @@ def _summarize_trials(trials: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
 
 
 class ComponentReport:
-    """Canonical JSON report and self-contained offline HTML rendering."""
+    """Canonical JSON report with HTML and Markdown renderings."""
 
     def __init__(self, component_name: str, component_root: Path, run_directory: Path, params_file: str, pipeline_params: Mapping[str, Any]) -> None:
         self.path = run_directory / "report.json"
         self.html_path = run_directory / "report.html"
+        self.markdown_path = run_directory / "report.md"
+        self.run_directory = run_directory
         trials: list[dict[str, Any]] = []
         self.data: dict[str, Any] = {"schema_version": 1, "component_name": component_name, "component_root": str(component_root), "params_file": params_file, "pipeline_params": copy.deepcopy(dict(pipeline_params)), "started_at": _timestamp(), "finished_at": None, "status": "running", "trials": trials, "playbooks": trials, "summary": {}}
 
     def start_trial(self, playbook: "Playbook") -> dict[str, Any]:
-        entry = {"trial_id": playbook.trial_id, "playbook_name": playbook.playbook_name, "input_params": copy.deepcopy(playbook.params), "resolved_params": copy.deepcopy(playbook.resolved_params), "output_params": {}, "output_notebook": playbook.output_relative.as_posix(), "output_html": playbook.output_html_relative.as_posix(), "output_path": playbook.output_relative.as_posix(), "started_at": _timestamp(), "finished_at": None, "duration_seconds": None, "status": "running", "error": None}
+        entry = {"trial_id": playbook.trial_id, "playbook_name": playbook.playbook_name, "input_params": copy.deepcopy(playbook.params), "resolved_params": copy.deepcopy(playbook.resolved_params), "output_params": {}, "output_notebook": playbook.output_relative.as_posix(), "output_html": playbook.output_html_relative.as_posix(), "output_markdown": playbook.output_markdown_relative.as_posix(), "output_path": playbook.output_relative.as_posix(), "started_at": _timestamp(), "finished_at": None, "duration_seconds": None, "status": "running", "error": None}
         self.data["trials"].append(entry)
         self.save()
         return entry
@@ -420,6 +423,18 @@ class ComponentReport:
         html_tmp = self.html_path.with_name(".report.html.tmp")
         html_tmp.write_text(_report_html(self.data), encoding="utf-8")
         os.replace(html_tmp, self.html_path)
+        markdown_tmp = self.markdown_path.with_name(".report.md.tmp")
+        markdown_tmp.write_text(_report_markdown(self.data), encoding="utf-8")
+        os.replace(markdown_tmp, self.markdown_path)
+        for trial in self.data["trials"]:
+            relative = trial.get("output_markdown")
+            if not relative:
+                continue
+            output_path = self.run_directory / relative
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_tmp = output_path.with_name(f".{output_path.name}.tmp")
+            output_tmp.write_text(_trial_markdown(trial), encoding="utf-8")
+            os.replace(output_tmp, output_path)
 
 
 class Playbook:
@@ -447,6 +462,8 @@ class Playbook:
         self.output_path = component.run_directory / self.output_relative
         self.output_html_relative = self.output_relative.with_suffix(".html")
         self.output_html_path = component.run_directory / self.output_html_relative
+        self.output_markdown_relative = self.output_relative.with_suffix(".report.md")
+        self.output_markdown_path = component.run_directory / self.output_markdown_relative
 
     def run(self) -> None:
         import papermill
@@ -718,21 +735,106 @@ class ZemiComponent:
         self._closed = True
 
 
+_SERVICE_INPUT_PARAMS = {"arsenal_config_path", "arsenal_start_and_stop_at_job_level"}
+
+
+def _human_label(name: str) -> str:
+    return name.replace("_", " ").strip().capitalize()
+
+
+def _display_value(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False)
+
+
+def _output_markdown_table(output_params: Mapping[str, Any]) -> str:
+    if not output_params:
+        return "_No published output._"
+    rows = [
+        "<table>",
+        "<thead><tr><th>Result</th><th>Value</th></tr></thead>",
+        "<tbody>",
+    ]
+    for name, value in output_params.items():
+        label = html.escape(_human_label(name))
+        displayed = _display_value(value)
+        escaped = html.escape(displayed)
+        if not isinstance(value, (str, int, float, bool)) or len(displayed) > 100 or "\n" in displayed:
+            rendered = (
+                f"<details><summary>Show value ({len(displayed)} characters)</summary>"
+                f"<pre>{escaped}</pre></details>"
+            )
+        else:
+            rendered = f"<code>{escaped}</code>"
+        rows.append(f"<tr><td>{label}</td><td>{rendered}</td></tr>")
+    rows.extend(("</tbody>", "</table>"))
+    return "\n".join(rows)
+
+
+def _trial_summary_text(trial: Mapping[str, Any]) -> str:
+    parts = [str(trial.get("trial_id") or trial.get("playbook_name") or "Trial")]
+    for name, value in trial.get("input_params", {}).items():
+        if name in _SERVICE_INPUT_PARAMS or not isinstance(value, (str, int, float, bool)):
+            continue
+        parts.append(f"{_human_label(name)}: {_display_value(value)}")
+    parts.append(f"Status: {trial.get('status', 'unknown')}")
+    duration = trial.get("duration_seconds")
+    if isinstance(duration, (int, float)):
+        parts.append(f"Duration: {_format_duration(duration)}")
+    return " · ".join(parts)
+
+
+def _trial_markdown(trial: Mapping[str, Any]) -> str:
+    title = html.escape(str(trial.get("trial_id") or trial.get("playbook_name") or "Trial"))
+    summary = html.escape(_trial_summary_text(trial))
+    links = []
+    for field, label in (("output_html", "Executed notebook HTML"), ("output_notebook", "Executed notebook")):
+        target = trial.get(field)
+        if target:
+            links.append(f"[{label}]({Path(str(target)).name})")
+    lines = [f"# {title} output", "", summary, ""]
+    if links:
+        lines.extend((" · ".join(links), ""))
+    lines.extend(("## Published output", "", _output_markdown_table(trial.get("output_params", {})), ""))
+    if trial.get("error"):
+        lines.extend(("## Error", "", f"```json\n{_display_value(trial['error'])}\n```", ""))
+    return "\n".join(lines)
+
+
+def _report_markdown(data: Mapping[str, Any]) -> str:
+    lines = [
+        f"# {html.escape(str(data.get('component_name', 'ZEMI')))} outputs",
+        "",
+        "[Open HTML job report](report.html)",
+        "",
+    ]
+    trials = data.get("trials") or data.get("playbooks") or []
+    if not trials:
+        lines.extend(("_No runs._", ""))
+    for trial in trials:
+        summary = html.escape(_trial_summary_text(trial))
+        target = trial.get("output_markdown")
+        lines.extend(("<details>", f"<summary>{summary}</summary>", ""))
+        if target:
+            lines.extend((f"[Open individual output report]({target})", ""))
+        lines.extend((_output_markdown_table(trial.get("output_params", {})), "", "</details>", ""))
+    return "\n".join(lines)
 def _report_html(data: Mapping[str, Any]) -> str:
     embedded = json.dumps(data, ensure_ascii=False, allow_nan=False).replace("<", "\\u003c")
     return f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ZEMI job report</title><style>
 :root{{--bg:#f6f7fb;--card:#fff;--ink:#172033;--muted:#667085;--line:#d9deea}}*{{box-sizing:border-box}}body{{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,sans-serif}}main{{max-width:1500px;margin:auto;padding:24px}}section{{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px;margin:16px 0;overflow:auto}}h1,h2{{margin:0 0 14px}}.controls{{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px}}input,select{{padding:8px;border:1px solid var(--line);border-radius:6px}}table{{border-collapse:collapse;width:auto;min-width:100%;table-layout:auto}}th,td{{border-bottom:1px solid var(--line);padding:6px;text-align:left;vertical-align:top;max-width:16rem}}th{{cursor:pointer;max-width:10rem;overflow-wrap:anywhere}}td{{overflow-wrap:anywhere}}.cell-value{{display:block;max-width:16rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}.col-trial_id,.col-status,.col-duration_seconds{{white-space:nowrap;width:1%}}.col-trial_id a{{display:block;max-width:14rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}pre{{white-space:pre-wrap;word-break:break-word}}</style></head><body><main><h1>ZEMI job report</h1>
 <section id="overview"><h2>Overview</h2><div></div></section>
 <section id="runs"><h2>Runs</h2><div class="controls"><input id="search" placeholder="Search all values"><select id="playbook-filter"><option value="">All playbooks</option></select><select id="status-filter"><option value="">All statuses</option></select><select id="parameter-filter"><option value="">Any parameter</option></select><input id="parameter-value" placeholder="Parameter value contains"></div><div></div></section>
-<section id="summary"><h2>Summary</h2><div></div></section>
+<section id="summary"><h2>Summary</h2><p><a href="report.md">Open Markdown output summary</a></p><div></div></section>
 <section id="run-details"><h2>Run details</h2><div></div></section><section id="errors"><h2>Errors</h2><div></div></section>
 <script id="report-data" type="application/json">{embedded}</script><script>
 const report=JSON.parse(document.getElementById('report-data').textContent),trials=report.trials||report.playbooks||[];const text=(tag,v)=>{{const n=document.createElement(tag);n.textContent=v;return n}},json=v=>JSON.stringify(v,null,2),scalar=v=>v===null||['string','number','boolean'].includes(typeof v);
 const counts={{total:trials.length,succeeded:trials.filter(x=>x.status==='succeeded').length,failed:trials.filter(x=>x.status==='failed').length}};document.querySelector('#overview div').append(text('pre',json({{component_name:report.component_name,params_file:report.params_file,status:report.status,started_at:report.started_at,finished_at:report.finished_at,counts}})));document.querySelector('#summary div').append(text('pre',json(report.summary||[])));
-const serviceParams=new Set(['arsenal_config_path','arsenal_start_and_stop_at_job_level']),ins=[...new Set(trials.flatMap(t=>Object.keys(t.input_params||{{}}).filter(k=>!serviceParams.has(k)&&scalar(t.input_params[k]))))].sort(),outs=[...new Set(trials.flatMap(t=>Object.keys(t.output_params||{{}}).filter(k=>scalar(t.output_params[k]))))].sort(),cols=['trial_id',...ins.map(k=>'in:'+k),...outs.map(k=>'out:'+k),'status','duration_seconds'];let sort='trial_id',asc=true;const val=(t,k)=>k.startsWith('in:')?(t.input_params||{{}})[k.slice(3)]:k.startsWith('out:')?(t.output_params||{{}})[k.slice(4)]:t[k];
-function render(){{let q=document.getElementById('search').value.toLowerCase(),p=document.getElementById('playbook-filter').value,s=document.getElementById('status-filter').value,pk=document.getElementById('parameter-filter').value,pv=document.getElementById('parameter-value').value.toLowerCase(),rows=trials.filter(t=>(!p||t.playbook_name===p)&&(!s||t.status===s)&&(!q||json(t).toLowerCase().includes(q))&&(!pk||!pv||String(val(t,pk)??'').toLowerCase().includes(pv)));rows.sort((a,b)=>String(val(a,sort)??'').localeCompare(String(val(b,sort)??''),undefined,{{numeric:true}})*(asc?1:-1));const table=document.createElement('table'),head=document.createElement('tr');cols.forEach(k=>{{const th=text('th',k);th.className='col-'+k.replace(':','-');th.title=k;th.onclick=()=>{{asc=sort===k?!asc:true;sort=k;render()}};head.append(th)}});table.append(head);rows.forEach(t=>{{const tr=document.createElement('tr');cols.forEach(k=>{{const td=document.createElement('td'),v=val(t,k),display=String(v??'');td.className='col-'+k.replace(':','-');if(k==='trial_id'&&(t.output_html||t.output_notebook||t.output_path)){{const a=text('a',display);a.href=t.output_html||t.output_notebook||t.output_path;a.title=display;td.append(a)}}else{{const span=text('span',display);span.className='cell-value';span.title=display;td.append(span)}}tr.append(td)}});table.append(tr)}});document.querySelector('#runs div:last-child').replaceChildren(table)}}
-for(const p of [...new Set(trials.map(t=>t.playbook_name))].sort()){{const o=text('option',p);o.value=p;document.getElementById('playbook-filter').append(o)}}for(const s of [...new Set(trials.map(t=>t.status))].sort()){{const o=text('option',s);o.value=s;document.getElementById('status-filter').append(o)}}for(const k of [...ins.map(k=>'in:'+k),...outs.map(k=>'out:'+k)]){{const o=text('option',k);o.value=k;document.getElementById('parameter-filter').append(o)}}['search','playbook-filter','status-filter','parameter-filter','parameter-value'].forEach(id=>document.getElementById(id).addEventListener('input',render));render();
-const details=document.querySelector('#run-details div');trials.forEach(t=>{{const block=document.createElement('article');block.append(text('h3',t.trial_id||'Trial'));block.append(text('pre',json({{playbook_name:t.playbook_name,status:t.status,input_params:t.input_params||{{}},output_params:t.output_params||{{}},error:t.error||null}})));details.append(block)}});const errors=trials.filter(t=>t.status==='failed');document.querySelector('#errors div').append(text(errors.length?'pre':'p',errors.length?json(errors.map(t=>({{trial_id:t.trial_id,error:t.error}}))):'No errors.'));
+const serviceParams=new Set(['arsenal_config_path','arsenal_start_and_stop_at_job_level']),ins=[...new Set(trials.flatMap(t=>Object.keys(t.input_params||{{}}).filter(k=>!serviceParams.has(k)&&scalar(t.input_params[k]))))].sort(),cols=['trial_id',...ins.map(k=>'in:'+k),'output_report','status','duration_seconds'];let sort='trial_id',asc=true;const val=(t,k)=>k.startsWith('in:')?(t.input_params||{{}})[k.slice(3)]:k==='output_report'?t.output_markdown:t[k];
+function render(){{let q=document.getElementById('search').value.toLowerCase(),p=document.getElementById('playbook-filter').value,s=document.getElementById('status-filter').value,pk=document.getElementById('parameter-filter').value,pv=document.getElementById('parameter-value').value.toLowerCase(),rows=trials.filter(t=>(!p||t.playbook_name===p)&&(!s||t.status===s)&&(!q||json(t).toLowerCase().includes(q))&&(!pk||!pv||String(val(t,pk)??'').toLowerCase().includes(pv)));rows.sort((a,b)=>String(val(a,sort)??'').localeCompare(String(val(b,sort)??''),undefined,{{numeric:true}})*(asc?1:-1));const table=document.createElement('table'),head=document.createElement('tr');cols.forEach(k=>{{const th=text('th',k);th.className='col-'+k.replace(':','-');th.title=k;th.onclick=()=>{{asc=sort===k?!asc:true;sort=k;render()}};head.append(th)}});table.append(head);rows.forEach(t=>{{const tr=document.createElement('tr');cols.forEach(k=>{{const td=document.createElement('td'),v=val(t,k),display=String(v??'');td.className='col-'+k.replace(':','-');if(k==='trial_id'&&(t.output_html||t.output_notebook||t.output_path)){{const a=text('a',display);a.href=t.output_html||t.output_notebook||t.output_path;a.title=display;td.append(a)}}else if(k==='output_report'&&v){{const a=text('a','Open outputs');a.href=v;td.append(a)}}else{{const span=text('span',display);span.className='cell-value';span.title=display;td.append(span)}}tr.append(td)}});table.append(tr)}});document.querySelector('#runs div:last-child').replaceChildren(table)}}
+for(const p of [...new Set(trials.map(t=>t.playbook_name))].sort()){{const o=text('option',p);o.value=p;document.getElementById('playbook-filter').append(o)}}for(const s of [...new Set(trials.map(t=>t.status))].sort()){{const o=text('option',s);o.value=s;document.getElementById('status-filter').append(o)}}for(const k of [...ins.map(k=>'in:'+k)]){{const o=text('option',k);o.value=k;document.getElementById('parameter-filter').append(o)}}['search','playbook-filter','status-filter','parameter-filter','parameter-value'].forEach(id=>document.getElementById(id).addEventListener('input',render));render();
+const details=document.querySelector('#run-details div');trials.forEach(t=>{{const block=document.createElement('article');block.append(text('h3',t.trial_id||'Trial'));block.append(text('pre',json({{playbook_name:t.playbook_name,status:t.status,input_params:t.input_params||{{}},output_report:t.output_markdown||null,error:t.error||null}})));details.append(block)}});const errors=trials.filter(t=>t.status==='failed');document.querySelector('#errors div').append(text(errors.length?'pre':'p',errors.length?json(errors.map(t=>({{trial_id:t.trial_id,error:t.error}}))):'No errors.'));
 </script></main></body></html>'''
 
 
