@@ -85,3 +85,12 @@ are located directly in the expected roots.
 
 - Use standard Git only, without GitHub CLI.
 - Use the `main` branch.
+
+## Library documentation
+
+- Store specifications for ZEMI library behavior under `docs/` in this library
+  repository.
+- Store complete, machine-readable usage examples under `examples/` in this
+  library repository.
+- Consumer repositories should link to these canonical files instead of
+  maintaining independent copies.

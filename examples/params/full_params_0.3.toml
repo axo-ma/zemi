@@ -1,0 +1,103 @@
+[system]
+version = "0.3"
+
+[system.params]
+locale = "en"
+
+[system.params.defaults]
+temperature = 0.2
+max_tokens = 512
+
+[component]
+name = "two-arsenal-search"
+stop_on_error = true
+
+[component.params]
+dataset_root = "@comp/data"
+
+[component.params.generation]
+__include__ = { ref = "system.params.defaults" }
+max_tokens = 768
+
+[[arsenals]]
+id = "local"
+config_path = "@comp/zemi/llm_curated_set_model_mode.toml"
+lifecycle = "job"
+
+[arsenals.params]
+device = "cpu"
+generation = { ref = "component.params.generation" }
+
+[[arsenals]]
+id = "remote"
+config_path = "@comp/zemi/llm_external_providers.toml"
+lifecycle = "external"
+
+[arsenals.params]
+device = "remote"
+
+[[playbooks]]
+id = "summarize-local"
+path = "playbook.ipynb"
+arsenal = "local"
+enabled = true
+
+[playbooks.params]
+__include__ = { ref = "component.params.generation" }
+locale = { ref = "system.params.locale" }
+device = { ref = "arsenals.local.params.device" }
+temperature = { values = [0.0, 0.2, 0.5], start = 0.2 }
+prompt_style = { values = ["brief", "detailed"], start = "brief" }
+
+[playbooks.sampler]
+strategy = "grid"
+max_samples = 6
+seed = 17
+
+[playbooks.sampler.sample_trial.dataset]
+adapter = "jsonl"
+path = "@comp/data/eval.jsonl"
+
+[playbooks.sampler.sample_trial.evaluator]
+adapter = "@comp/evaluators/summary.py:evaluate"
+
+[playbooks.sampler.sample_trial.evaluator.params]
+language = { ref = "system.params.locale" }
+
+[playbooks.sampler.sample_trial.objective]
+metric = "quality"
+direction = "maximize"
+
+[[playbooks]]
+id = "extract-remote"
+path = "playbook_gbnf.ipynb"
+arsenal = "remote"
+enabled = true
+
+[playbooks.params]
+__include__ = [
+  { ref = "system.params.defaults" },
+  { ref = "component.params.generation" },
+]
+device = { ref = "arsenals.remote.params.device" }
+schema_mode = { values = ["strict", "repair"], start = "strict" }
+temperature = { range = { min = 0.0, max = 0.4, step = 0.2 }, start = 0.0 }
+
+[playbooks.sampler]
+strategy = "coordinate"
+max_samples = 5
+seed = 23
+
+[playbooks.sampler.sample_trial.dataset]
+adapter = "csv"
+path = "@comp/data/extraction.csv"
+
+[playbooks.sampler.sample_trial.dataset.params]
+input_column = "text"
+
+[playbooks.sampler.sample_trial.evaluator]
+adapter = "@comp/evaluators/extraction.py:evaluate"
+
+[playbooks.sampler.sample_trial.objective]
+metric = "f1"
+direction = "maximize"
