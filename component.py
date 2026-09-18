@@ -11,6 +11,7 @@ import re
 import sys
 import time
 import tomllib
+import warnings
 from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
@@ -18,6 +19,110 @@ from typing import Any, Mapping
 
 from . import env
 from .playbook import PLAYBOOK_OUTPUT_MIME, _output_context, validate_output_params
+from .params import ParamSampler, ParamSpace, validate_document
+
+
+def _canonical_runtime(document: Mapping[str, Any]) -> dict[str, Any]:
+    """Resolve a Params 0.3 document and adapt it to the established runner."""
+    canonical = validate_document(document)
+    reference_document: dict[str, Any] = {
+        "system": canonical["system"],
+        "component": canonical["component"],
+        "arsenals": {item["id"]: item for item in canonical["arsenals"]},
+        "playbooks": {item["id"]: item for item in canonical["playbooks"]},
+    }
+
+    def validate_refs(value: Any, label: str) -> None:
+        if isinstance(value, Mapping):
+            if "ref" in value:
+                path = value.get("ref")
+                parts = path.split(".") if isinstance(path, str) else []
+                allowed = (
+                    parts[:2] in (["system", "params"], ["component", "params"])
+                    or len(parts) >= 3 and parts[0] in {"arsenals", "playbooks"} and parts[2] == "params"
+                )
+                if not allowed:
+                    raise ValueError(f"{label}: refs may target only params sections, got {path!r}")
+            for key, item in value.items():
+                validate_refs(item, f"{label}.{key}")
+        elif isinstance(value, list):
+            for index, item in enumerate(value): validate_refs(item, f"{label}[{index}]")
+
+    def resolved_params(table: Mapping[str, Any], label: str, owner: str) -> dict[str, Any]:
+        validate_refs(table, label)
+        raw, origins = _ParamReferenceResolver(reference_document).resolve_table(table, label)
+        variants = _resolve_playbook_params(raw, label, owner, origins)
+        if len(variants) != 1:
+            raise ValueError(f"{label} must not use legacy each wrappers in Params 0.3")
+        return variants[0][0]
+
+    system_params = resolved_params(canonical["system"]["params"], "system.params", "system")
+    reference_document["system"]["params"] = system_params
+    component_params = resolved_params(canonical["component"]["params"], "component.params", "component")
+    reference_document["component"]["params"] = component_params
+    for arsenal in canonical["arsenals"]:
+        label = f"arsenals.{arsenal['id']}.params"
+        arsenal["params"] = resolved_params(arsenal["params"], label, arsenal["id"])
+        reference_document["arsenals"][arsenal["id"]]["params"] = arsenal["params"]
+
+    groups: dict[str, dict[str, Any]] = {}
+    for arsenal in canonical["arsenals"]:
+        groups[arsenal["id"]] = {
+            "name": arsenal["id"],
+            "arsenal_config_path": arsenal.get("config_path"),
+            "arsenal_start_and_stop_at_job_level": arsenal["lifecycle"] == "job",
+            "playbooks_params": [],
+        }
+    for playbook in canonical["playbooks"]:
+        label = f"playbooks.{playbook['id']}.params"
+        playbook_params = resolved_params(playbook["params"], label, playbook["id"])
+        reference_document["playbooks"][playbook["id"]]["params"] = playbook_params
+        space = ParamSpace.from_params(playbook_params, label)
+        sampler_config = playbook.get("sampler")
+        if sampler_config:
+            trial_config = sampler_config["sample_trial"]
+            trial_config["dataset"]["params"] = resolved_params(
+                trial_config["dataset"]["params"],
+                f"playbooks.{playbook['id']}.sampler.sample_trial.dataset.params",
+                playbook["id"],
+            )
+            trial_config["evaluator"]["params"] = resolved_params(
+                trial_config["evaluator"]["params"],
+                f"playbooks.{playbook['id']}.sampler.sample_trial.evaluator.params",
+                playbook["id"],
+            )
+            objective = sampler_config["sample_trial"]["objective"]
+            sampler = ParamSampler(
+                space,
+                sampler_config["strategy"],
+                max_samples=sampler_config.get("max_samples"),
+                seed=sampler_config.get("seed"),
+                block_size=sampler_config.get("block_size"),
+                objective_metric=objective["metric"],
+                direction=objective["direction"],
+            )
+            samples = list(sampler.candidates)
+        else:
+            samples = [space.start]
+        groups[playbook["arsenal"]]["playbooks_params"].append({
+            "playbook_name": playbook["path"],
+            "playbook_id": playbook["id"],
+            "enabled": playbook.get("enabled", True),
+            "playbook_params": playbook_params,
+            "_v03_samples": [copy.deepcopy(dict(sample.values)) for sample in samples],
+            "_v03_sampler": copy.deepcopy(sampler_config),
+        })
+    component = canonical["component"]
+    return {
+        "pipeline_params": system_params,
+        "component_params": {
+            "component_name": component.get("name"),
+            "stop_on_error": component.get("stop_on_error", True),
+            **component_params,
+        },
+        "arsenals": list(groups.values()),
+        "_params_03": canonical,
+    }
 
 
 def _playbook_name(item: object, index: int) -> str:
@@ -578,6 +683,15 @@ class ZemiComponent:
         self.root = env.path.comp.root; self.params_path = _select_params_path(self.root, params_file)
         with self.params_path.open("rb") as file:
             self.params = tomllib.load(file)
+        self.params_03 = "system" in self.params
+        if self.params_03:
+            self.params = _canonical_runtime(self.params)
+        else:
+            warnings.warn(
+                "Legacy ZEMI parameter schema is deprecated; migrate to Params 0.3",
+                DeprecationWarning,
+                stacklevel=2,
+            )
         pipeline_resolver = _ParamReferenceResolver(self.params)
         raw_pipeline, pipeline_origins = pipeline_resolver.resolve_table(
             _params_table(self.params, "pipeline_params"),
@@ -678,8 +792,17 @@ class ZemiComponent:
                     raw["arsenal_start_and_stop_at_job_level"] = False
                     if arsenal_config_path is not None:
                         raw.setdefault("arsenal_config_path", arsenal_config_path)
-                for trial_index, (params, resolved) in enumerate(_resolve_playbook_params(raw, label, config["playbook_name"], reference_origins)):
+                if "_v03_samples" in config:
+                    variants = [
+                        (copy.deepcopy(sample), copy.deepcopy(reference_origins))
+                        for sample in config["_v03_samples"]
+                    ]
+                else:
+                    variants = _resolve_playbook_params(raw, label, config["playbook_name"], reference_origins)
+                for trial_index, (params, resolved) in enumerate(variants):
                     playbook = Playbook(self, config, config_index=config_index, trial_index=trial_index, params=params, resolved_params=resolved)
+                    playbook.playbook_id = config.get("playbook_id")
+                    playbook.sampler_config = copy.deepcopy(config.get("_v03_sampler"))
                     playbooks.append(playbook); group_playbooks.append(playbook)
                 config_index += 1
             self._arsenal_groups.append((managed, arsenal_config_path, tuple(group_playbooks)))
