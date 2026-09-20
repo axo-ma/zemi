@@ -8,6 +8,7 @@ import json
 import math
 import random
 import re
+from datetime import datetime, timezone
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -21,7 +22,7 @@ _COMPONENT_KEYS = {"name", "stop_on_error", "params"}
 _ARSENAL_KEYS = {"id", "config_path", "lifecycle", "params"}
 _PLAYBOOK_KEYS = {"id", "path", "arsenal", "enabled", "params", "sampler"}
 _SAMPLER_KEYS = {"strategy", "max_samples", "seed", "block_size", "sample_trial"}
-_TRIAL_KEYS = {"dataset", "evaluator", "objective"}
+_TRIAL_KEYS = {"dataset", "evaluator", "objective", "run"}
 _DATASET_KEYS = {"adapter", "path", "params"}
 _EVALUATOR_KEYS = {"adapter", "params"}
 _OBJECTIVE_KEYS = {"metric", "direction"}
@@ -173,6 +174,13 @@ def _validate_sampler(raw: Any, label: str) -> dict[str, Any]:
     if objective.get("direction") not in {"maximize", "minimize"}:
         raise ValueError(f"{label}.sample_trial.objective.direction must be maximize or minimize")
     trial.update(dataset=dataset, evaluator=evaluator, objective=objective)
+    if "run" in trial:
+        adapter = _table(trial["run"], f"{label}.sample_trial.run")
+        _closed(adapter, _EVALUATOR_KEYS, f"{label}.sample_trial.run")
+        if not isinstance(adapter.get("adapter"), str) or not adapter["adapter"]:
+            raise ValueError(f"{label}.sample_trial.run.adapter must be a non-empty string")
+        adapter["params"] = _params(adapter.get("params", {}), f"{label}.sample_trial.run.params")
+        trial["run"] = adapter
     sampler["sample_trial"] = trial
     return sampler
 
@@ -258,6 +266,8 @@ class SampleTrialResult:
     metrics: dict[str, float]
     feedback: Any = None
     error: str | None = None
+    started_at: str | None = None
+    finished_at: str | None = None
 
 
 class ParamSampler:
@@ -277,9 +287,9 @@ class ParamSampler:
         return tuple(self._candidates)
 
     def _build_candidates(self) -> list[ParamSample]:
-        grid = self.space.grid()
-        if self.strategy == "grid": candidates = grid
+        if self.strategy == "grid": candidates = self.space.grid()
         elif self.strategy == "random":
+            grid = self.space.grid()
             tail = grid[1:]; random.Random(self.seed).shuffle(tail); candidates = [grid[0], *tail]
         else:
             start = self.space.start; candidates = [start]
@@ -296,7 +306,24 @@ class ParamSampler:
         return candidates[:self.max_samples] if self.max_samples is not None else candidates
 
     def propose(self, history: Sequence[SampleTrialResult]) -> ParamSample | None:
+        if self.max_samples is not None and len(history) >= self.max_samples:
+            return None
         observed = {result.sample.key() for result in history}
+        if self.strategy in {"coordinate", "block_coordinate"}:
+            if not history:
+                return self.space.start
+            best = PlaybookTrialResult(list(history)).best(self.objective_metric, self.direction)
+            anchor = best.sample if best else self.space.start
+            size = 1 if self.strategy == "coordinate" else self.block_size
+            for offset in range(0, len(self.space.dimensions), size):
+                block = self.space.dimensions[offset:offset + size]
+                for values in itertools.product(*(d.values for d in block)):
+                    candidate = copy.deepcopy(dict(anchor.values))
+                    candidate.update((d.name, value) for d, value in zip(block, values))
+                    sample = ParamSample(candidate)
+                    if sample.key() not in observed:
+                        return sample
+            return None
         return next((sample for sample in self._candidates if sample.key() not in observed), None)
 
     def observe(self, history: Sequence[SampleTrialResult], result: SampleTrialResult) -> None:
@@ -309,28 +336,46 @@ class PlaybookTrialResult:
     history: list[SampleTrialResult] = field(default_factory=list)
 
     def best(self, metric: str, direction: str) -> SampleTrialResult | None:
-        valid = [item for item in self.history if item.error is None and metric in item.metrics]
+        valid = [item for item in self.history if item.error is None and metric in item.metrics
+                 and not isinstance(item.metrics[metric], bool)
+                 and isinstance(item.metrics[metric], (int, float)) and math.isfinite(item.metrics[metric])]
         if not valid: return None
         return (max if direction == "maximize" else min)(valid, key=lambda item: item.metrics[metric])
 
 
-def run_playbook_trial(*, sampler: ParamSampler, dataset: Iterable[Any], run: Callable[[ParamSample, Any], Any], evaluator: Callable[[ParamSample, Sequence[Any]], Mapping[str, Any] | tuple[Mapping[str, Any], Any]], metric: str, direction: str) -> PlaybookTrialResult:
+def run_playbook_trial(*, sampler: ParamSampler, dataset: Iterable[Any], run: Callable[[ParamSample, Any], Any], evaluator: Callable[[ParamSample, Sequence[Any]], Mapping[str, Any] | tuple[Mapping[str, Any], Any]], metric: str, direction: str, on_sample=None) -> PlaybookTrialResult:
     """Execute the required propose -> runs -> evaluate -> observe outer loop."""
     result = PlaybookTrialResult()
     items = list(dataset)
     while (sample := sampler.propose(result.history)) is not None:
-        runs = [run(sample, item) for item in items]
-        evaluated = evaluator(sample, runs)
-        metrics_raw, feedback = evaluated if isinstance(evaluated, tuple) else (evaluated, None)
-        if not isinstance(metrics_raw, Mapping): raise ValueError("evaluator must return a metric map or (metric map, feedback)")
+        if sample.key() in {trial.sample.key() for trial in result.history}:
+            raise ValueError("sampler proposed a duplicate ParamSample")
+        started = datetime.now(timezone.utc).isoformat()
+        runs = []
+        for item in items:
+            try:
+                runs.append(run(sample, item))
+            except Exception as failure:
+                runs.append({"item": item, "prediction": None, "error": str(failure)})
         metrics: dict[str, float] = {}
-        for name, value in metrics_raw.items():
-            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
-                raise ValueError(f"evaluator metric {name!r} must be a finite number")
-            metrics[str(name)] = float(value)
-        if metric not in metrics: raise ValueError(f"evaluator result does not contain objective metric {metric!r}")
-        trial = SampleTrialResult(sample, runs, metrics, _json_copy(feedback, "evaluator feedback"))
+        feedback = error = None
+        try:
+            evaluated = evaluator(sample, runs)
+            metrics_raw, feedback = evaluated if isinstance(evaluated, tuple) else (evaluated, None)
+            if not isinstance(metrics_raw, Mapping): raise ValueError("evaluator must return a metric map or (metric map, feedback)")
+            for name, value in metrics_raw.items():
+                if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+                    raise ValueError(f"evaluator metric {name!r} must be a finite number")
+                metrics[str(name)] = float(value)
+            if metric not in metrics: raise ValueError(f"evaluator result does not contain objective metric {metric!r}")
+            feedback = _json_copy(feedback, "evaluator feedback")
+        except Exception as failure:
+            error = str(failure)
+            feedback = None
+        trial = SampleTrialResult(sample, runs, metrics, feedback, error, started, datetime.now(timezone.utc).isoformat())
         result.history.append(trial); sampler.observe(result.history, trial)
+        if on_sample is not None:
+            on_sample(trial, result)
     return result
 
 

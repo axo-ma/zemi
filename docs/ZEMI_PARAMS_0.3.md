@@ -220,6 +220,10 @@ by DSPy, but they obey the same `propose(history)` / `observe(...)` contract.
   finite numeric metric map plus optional JSON-compatible feedback.
 - `objective` (required table): `metric` is the exact evaluator metric key and
   `direction` is exactly `maximize` or `minimize`.
+- `run` (optional table): `adapter` identifies a registered or local run
+  callable; `params` contains only adapter user values. It defaults to the
+  `notebook` adapter. The run adapter receives the sample and item input only,
+  never ground truth. See [dataset adapter contracts](DATASET_OPTIMIZATION.md).
 
 Dataset and evaluator adapters are deliberately small interfaces; Params 0.3
 does not prescribe a machine-learning framework.
@@ -271,7 +275,7 @@ Resolution is deterministic:
 3. Resolve `system.params`.
 4. Resolve `component.params`.
 5. Resolve each `arsenals[].params` in document order.
-6. Resolve each `playbooks[].params`, dataset params, and evaluator params in
+6. Resolve each `playbooks[].params`, dataset params, evaluator params, and run params in
    document order.
 7. Within one table, apply `__include__` entries left-to-right; later includes
    replace earlier keys, then local keys replace all included keys.

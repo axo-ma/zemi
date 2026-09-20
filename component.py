@@ -19,7 +19,7 @@ from typing import Any, Mapping
 
 from . import env
 from .playbook import PLAYBOOK_OUTPUT_MIME, _output_context, validate_output_params
-from .params import ParamSampler, ParamSpace, validate_document
+from .params import ParamSampler, ParamSpace, SampleTrialResult, run_playbook_trial, validate_document
 
 
 def _canonical_runtime(document: Mapping[str, Any]) -> dict[str, Any]:
@@ -91,6 +91,10 @@ def _canonical_runtime(document: Mapping[str, Any]) -> dict[str, Any]:
                 f"playbooks.{playbook['id']}.sampler.sample_trial.evaluator.params",
                 playbook["id"],
             )
+            if "run" in trial_config:
+                trial_config["run"]["params"] = resolved_params(
+                    trial_config["run"]["params"],
+                    f"playbooks.{playbook['id']}.sampler.sample_trial.run.params", playbook["id"])
             objective = sampler_config["sample_trial"]["objective"]
             sampler = ParamSampler(
                 space,
@@ -101,16 +105,18 @@ def _canonical_runtime(document: Mapping[str, Any]) -> dict[str, Any]:
                 objective_metric=objective["metric"],
                 direction=objective["direction"],
             )
-            samples = list(sampler.candidates)
+            samples = [space.start]
         else:
             samples = [space.start]
         groups[playbook["arsenal"]]["playbooks_params"].append({
-            "playbook_name": playbook["path"],
+            "playbook_name": playbook["path"].removeprefix("@comp/"),
             "playbook_id": playbook["id"],
             "enabled": playbook.get("enabled", True),
             "playbook_params": playbook_params,
             "_v03_samples": [copy.deepcopy(dict(sample.values)) for sample in samples],
             "_v03_sampler": copy.deepcopy(sampler_config),
+            "_v03_space": copy.deepcopy(playbook_params),
+            "_v03_lifecycle": reference_document["arsenals"][playbook["arsenal"]]["lifecycle"],
         })
     component = canonical["component"]
     return {
@@ -521,6 +527,8 @@ class ComponentReport:
 
     def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        if "job_trial" in self.data:
+            self.data["job_trial"].update({key: self.data[key] for key in ("status", "started_at", "finished_at")})
         self.data["summary"] = _summarize_trials(self.data["trials"])
         json_tmp = self.path.with_name(".report.json.tmp")
         json_tmp.write_text(json.dumps(self.data, ensure_ascii=False, indent=2, allow_nan=False) + "\n", encoding="utf-8")
@@ -679,14 +687,40 @@ class Playbook:
 class ZemiComponent:
     """Load component parameters and own expanded playbook trial lifecycle."""
 
-    def __init__(self, params_file: str | Path | Sequence[str | Path] | None = None) -> None:
+    def __init__(self, params_file: str | Path | Sequence[str | Path] | None = None, *, sample_overrides: Mapping[str, Mapping[str, Any]] | None = None) -> None:
         self.root = env.path.comp.root; self.params_path = _select_params_path(self.root, params_file)
         with self.params_path.open("rb") as file:
             self.params = tomllib.load(file)
         self.params_03 = "system" in self.params
         if self.params_03:
             self.params = _canonical_runtime(self.params)
+            remaining = set(sample_overrides or {})
+            for group in self.params["arsenals"]:
+                for config in group["playbooks_params"]:
+                    identifier = config["playbook_id"]
+                    if identifier not in remaining:
+                        continue
+                    values = validate_output_params(sample_overrides[identifier])
+                    space = ParamSpace.from_params(config["_v03_space"])
+                    if set(values) != set(space.start.values):
+                        raise ValueError(f"sample_overrides.{identifier}: expected all configured parameter keys")
+                    for key, value in space.fixed.items():
+                        if json.dumps(values[key], sort_keys=True) != json.dumps(value, sort_keys=True):
+                            raise ValueError(f"sample_overrides.{identifier}.{key}: fixed parameter differs")
+                    for dimension in space.dimensions:
+                        if json.dumps(values[dimension.name], sort_keys=True) not in [json.dumps(v, sort_keys=True) for v in dimension.values]:
+                            raise ValueError(f"sample_overrides.{identifier}.{dimension.name}: value outside domain")
+                    config["_v03_space"] = values
+                    config["_v03_samples"] = [values]
+                    if config["_v03_sampler"]:
+                        config["_v03_sampler"].update(strategy="grid", max_samples=1)
+                        config["_v03_sampler"].pop("block_size", None)
+                    remaining.remove(identifier)
+            if remaining:
+                raise ValueError(f"sample_overrides: unknown playbook ids {sorted(remaining)}")
         else:
+            if sample_overrides:
+                raise ValueError("sample_overrides requires Params 0.3")
             warnings.warn(
                 "Legacy ZEMI parameter schema is deprecated; migrate to Params 0.3",
                 DeprecationWarning,
@@ -800,6 +834,10 @@ class ZemiComponent:
                 else:
                     variants = _resolve_playbook_params(raw, label, config["playbook_name"], reference_origins)
                 for trial_index, (params, resolved) in enumerate(variants):
+                    if "_v03_samples" in config:
+                        if arsenal_config_path is not None:
+                            params["arsenal_config_path"] = arsenal_config_path
+                        params["arsenal_start_and_stop_at_job_level"] = config.get("_v03_lifecycle") in {"job", "external"}
                     playbook = Playbook(self, config, config_index=config_index, trial_index=trial_index, params=params, resolved_params=resolved)
                     playbook.playbook_id = config.get("playbook_id")
                     playbook.sampler_config = copy.deepcopy(config.get("_v03_sampler"))
@@ -808,8 +846,123 @@ class ZemiComponent:
             self._arsenal_groups.append((managed, arsenal_config_path, tuple(group_playbooks)))
         self.playbooks = tuple(playbooks); self._closed = False; self.report.save()
 
+    def _prepare_datasets(self):
+        from .dataset import resolve_adapter
+        prepared = {}
+        for playbook in self.playbooks:
+            if not playbook.enabled or not playbook.sampler_config:
+                continue
+            config = playbook.sampler_config["sample_trial"]
+            try:
+                loader = resolve_adapter("dataset", config["dataset"]["adapter"])
+                evaluator = resolve_adapter("evaluator", config["evaluator"]["adapter"])
+                runner = resolve_adapter("run", config.get("run", {}).get("adapter", "notebook"))
+                items = list(loader(path=config["dataset"].get("path"), params=config["dataset"]["params"]))
+                if not items:
+                    raise ValueError("dataset must not be empty")
+                ids = set()
+                for index, item in enumerate(items):
+                    if not isinstance(item, dict) or "input" not in item:
+                        raise ValueError(f"dataset[{index}] must be an object with input")
+                    item.setdefault("id", index)
+                    key = json.dumps(item["id"], sort_keys=True)
+                    if key in ids:
+                        raise ValueError(f"dataset[{index}].id is duplicated")
+                    ids.add(key)
+                prepared[playbook.playbook_id] = (items, evaluator, runner)
+            except Exception as error:
+                raise ValueError(f"playbooks.{playbook.playbook_id}.sampler.sample_trial: {error}") from error
+        return prepared
+
+    def _run_dataset(self, playbook, prepared):
+        from .dataset import RunContext
+        items, evaluate, adapter = prepared
+        config = playbook.sampler_config
+        trial_config = config["sample_trial"]
+        objective = trial_config["objective"]
+        sampler = ParamSampler(ParamSpace.from_params(playbook.config["_v03_space"]), config["strategy"],
+                               max_samples=config.get("max_samples"), seed=config.get("seed"), block_size=config.get("block_size"),
+                               objective_metric=objective["metric"], direction=objective["direction"])
+        parent = {"playbook_trial_id": playbook.playbook_id, "playbook_id": playbook.playbook_id,
+                  "started_at": _timestamp(), "finished_at": None, "status": "running", "samples": [],
+                  "objective": objective, "ranking": [], "best_sample": None}
+        self.report.data.setdefault("job_trial", {"job_trial_id": self.run_directory.name, "playbook_trials": []})["playbook_trials"].append(parent)
+        context = RunContext()
+        serial = 0
+
+        def run(sample, item):
+            nonlocal serial
+            serial += 1
+            started = _timestamp()
+            record = {"playbook_run_id": f"{playbook.playbook_id}-run-{serial:06d}", "item": copy.deepcopy(item),
+                      "prediction": None, "error": None, "started_at": started, "status": "running"}
+
+            def execute(inputs):
+                params = copy.deepcopy(dict(sample.values))
+                for key in _SERVICE_INPUT_PARAMS:
+                    if key in playbook.params:
+                        params[key] = playbook.params[key]
+                params.update(copy.deepcopy(inputs))
+                child = Playbook(self, playbook.config, config_index=self.playbooks.index(playbook), trial_index=serial - 1, params=params)
+                try:
+                    child.run()
+                finally:
+                    entry = next((t for t in reversed(self.report.data["trials"]) if t["trial_id"] == child.trial_id), None)
+                    if entry:
+                        entry["playbook_run_id"] = record["playbook_run_id"]
+                        record["artifacts"] = {key: entry[key] for key in ("output_notebook", "output_html", "output_markdown")}
+                return entry["output_params"]
+
+            try:
+                record["prediction"] = validate_output_params(adapter(sample, copy.deepcopy(item["input"]), execute=execute,
+                                                        context=context, params=trial_config.get("run", {}).get("params", {})))
+                record["status"] = "succeeded"
+            except Exception as error:
+                record.update(error=_error_data(error), status="failed")
+            record["finished_at"] = _timestamp()
+            return record
+
+        def evaluator(sample, runs):
+            context.close()
+            return evaluate(SampleTrialResult(sample, runs, {}), params=trial_config["evaluator"]["params"])
+
+        def save_sample(trial, result):
+            sample_id = f"{playbook.playbook_id}-sample-{len(result.history):04d}"
+            parent["samples"].append({"sample_trial_id": sample_id, "proposal_ordinal": len(result.history),
+                "params": dict(trial.sample.values), "runs": trial.runs, "metrics": trial.metrics, "feedback": trial.feedback,
+                "objective_value": trial.metrics.get(objective["metric"]) if trial.error is None else None,
+                "error": trial.error, "status": "failed" if trial.error else "succeeded",
+                "run_errors": sum(r.get("status") == "failed" for r in trial.runs),
+                "started_at": trial.started_at, "finished_at": trial.finished_at})
+            for record in trial.runs:
+                record["sample_trial_id"] = sample_id
+            ranked = sorted((s for s in parent["samples"] if s["error"] is None),
+                            key=lambda s: s["objective_value"], reverse=objective["direction"] == "maximize")
+            parent["ranking"] = [s["sample_trial_id"] for s in ranked]
+            parent["best_sample"] = parent["ranking"][0] if ranked else None
+            self.report.save()
+
+        try:
+            result = run_playbook_trial(sampler=sampler, dataset=items, run=run, evaluator=evaluator,
+                metric=objective["metric"], direction=objective["direction"], on_sample=save_sample)
+            parent["status"] = "failed" if any(s.error for s in result.history) else "succeeded"
+            if parent["status"] == "failed":
+                raise ValueError(f"PlaybookTrial {playbook.playbook_id}: evaluator failed; see report")
+        except Exception:
+            parent["status"] = "failed"
+            raise
+        finally:
+            context.close()
+            parent["finished_at"] = _timestamp()
+            self.report.save()
+
     def run(self) -> None:
         first_error: BaseException | None = None
+        try:
+            prepared = self._prepare_datasets()
+        except Exception as error:
+            self.report.record_failure(error)
+            raise
         from . import arsenal
         from .arsenal import ArsenalSession
         for managed, arsenal_config_path, group_playbooks in self._arsenal_groups:
@@ -823,7 +976,10 @@ class ZemiComponent:
                     arsenal.begin(session, stop_before_begin=True)
                 for playbook in enabled_playbooks:
                     try:
-                        playbook.run()
+                        if playbook.sampler_config:
+                            self._run_dataset(playbook, prepared[playbook.playbook_id])
+                        else:
+                            playbook.run()
                     except Exception as error:
                         first_error = first_error or error; self.report.record_failure(error)
                         if self.stop_on_error:
@@ -847,7 +1003,10 @@ class ZemiComponent:
         if self.report.data["status"] == "running":
             self.report.data["status"] = (
                 "failed"
-                if any(trial.get("status") == "failed" for trial in self.report.data["trials"])
+                if (any(trial.get("status") == "failed" for trial in self.report.data["trials"])
+                    or any(run.get("status") == "failed"
+                           for trial in self.report.data.get("job_trial", {}).get("playbook_trials", [])
+                           for sample in trial["samples"] for run in sample["runs"]))
                 else "succeeded"
             )
         self.report.data["finished_at"] = _timestamp()
@@ -1004,7 +1163,7 @@ def _main_markdown(data: Mapping[str, Any]) -> str:
     else:
         for trial in errors:
             lines.extend((f"### {trial.get('trial_id', 'Trial')}", "", "```json", _display_value(trial.get("error")), "```", ""))
-    return "\n".join(lines)
+    return "\n".join(lines) + _dataset_markdown(data)
 
 
 def _report_markdown(data: Mapping[str, Any]) -> str:
@@ -1024,6 +1183,30 @@ def _report_markdown(data: Mapping[str, Any]) -> str:
         if target:
             lines.extend((f"[Open individual output report]({target})", ""))
         lines.extend((_output_markdown_table(trial.get("output_params", {})), "", "</details>", ""))
+    return "\n".join(lines) + _dataset_markdown(data)
+
+
+def _dataset_markdown(data):
+    lines = []
+    for trial in data.get("job_trial", {}).get("playbook_trials", []):
+        lines.extend(("", f"## Dataset optimization: {_markdown_cell(trial['playbook_id'])}", "",
+                      f"Best sample: `{trial['best_sample']}`", "",
+                      "Ranking: " + ", ".join(trial["ranking"]), ""))
+        for sample in trial["samples"]:
+            lines.extend((f"### {sample['sample_trial_id']}", "", f"Status: {sample['status']}", "",
+                          "Parameters:", "", "```json", _display_value(sample["params"]), "```", "",
+                          "Metrics:", "", _output_markdown_table(sample["metrics"]), ""))
+            if sample["error"]:
+                lines.extend(("Error: " + html.escape(sample["error"]), ""))
+            details = (sample.get("feedback") or {}).get("items", []) if isinstance(sample.get("feedback"), dict) else []
+            lines.extend(("| Item | Worksheet | Ground truth | Prediction | TP | FP | FN | Precision | Recall | F1 | Error |",
+                          "|---|---|---|---|---:|---:|---:|---:|---:|---:|---|"))
+            for item in details:
+                values = [item["item_id"], item["input"], item["ground_truth"], item["prediction"],
+                          *[item[k] for k in ("tp", "fp", "fn", "precision", "recall", "f1", "error")]]
+                lines.append("| " + " | ".join(_markdown_cell(v) for v in values) + " |")
+            lines.extend(("", "<details><summary>All PlaybookRuns and feedback</summary>", "",
+                          "```json", _display_value({"runs": sample["runs"], "feedback": sample["feedback"]}), "```", "", "</details>", ""))
     return "\n".join(lines)
 
 def _params_table(params: Mapping[str, Any], name: str) -> dict[str, Any]:
