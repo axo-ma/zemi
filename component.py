@@ -78,7 +78,33 @@ def _canonical_runtime(document: Mapping[str, Any]) -> dict[str, Any]:
         playbook_params = resolved_params(playbook["params"], label, playbook["id"])
         reference_document["playbooks"][playbook["id"]]["params"] = playbook_params
         space = ParamSpace.from_params(playbook_params, label)
+        mode = playbook.get("param_space_mode")
+        if isinstance(mode, Mapping):
+            resolved_mode = resolved_params(
+                {"param_space_mode": mode},
+                f"playbooks.{playbook['id']}",
+                playbook["id"],
+            )
+            mode = resolved_mode["param_space_mode"]
+        if mode is None:
+            if space.dimensions:
+                names = ", ".join(dimension.name for dimension in space.dimensions)
+                raise ValueError(
+                    f"playbooks.{playbook['id']}.param_space_mode is required because "
+                    f"playbooks.{playbook['id']}.params defines variable dimensions: {names}"
+                )
+            mode = "start_only"
         sampler_config = playbook.get("sampler")
+        if mode == "sampler" and sampler_config is None:
+            raise ValueError(
+                f'playbooks.{playbook["id"]}.param_space_mode = "sampler" requires '
+                f"playbooks.{playbook['id']}.sampler"
+            )
+        if mode == "start_only" and sampler_config is not None:
+            raise ValueError(
+                f"playbooks.{playbook['id']}.sampler is not allowed when "
+                f'playbooks.{playbook["id"]}.param_space_mode = "start_only"'
+            )
         if sampler_config:
             trial_config = sampler_config["sample_trial"]
             trial_config["dataset"]["params"] = resolved_params(
@@ -115,6 +141,7 @@ def _canonical_runtime(document: Mapping[str, Any]) -> dict[str, Any]:
             "playbook_params": playbook_params,
             "_v03_samples": [copy.deepcopy(dict(sample.values)) for sample in samples],
             "_v03_sampler": copy.deepcopy(sampler_config),
+            "_v03_param_space_mode": mode,
             "_v03_space": copy.deepcopy(playbook_params),
             "_v03_lifecycle": reference_document["arsenals"][playbook["arsenal"]]["lifecycle"],
         })
@@ -505,7 +532,7 @@ class ComponentReport:
         self.data: dict[str, Any] = {"schema_version": 1, "component_name": component_name, "component_root": str(component_root), "params_file": params_file, "pipeline_params": copy.deepcopy(dict(pipeline_params)), "started_at": _timestamp(), "finished_at": None, "status": "running", "trials": trials, "playbooks": trials, "summary": {}}
 
     def start_trial(self, playbook: "Playbook") -> dict[str, Any]:
-        entry = {"trial_id": playbook.trial_id, "playbook_name": playbook.playbook_name, "input_params": copy.deepcopy(playbook.params), "resolved_params": copy.deepcopy(playbook.resolved_params), "output_params": {}, "output_notebook": playbook.output_relative.as_posix(), "output_html": playbook.output_html_relative.as_posix(), "output_markdown": playbook.output_markdown_relative.as_posix(), "output_path": playbook.output_relative.as_posix(), "started_at": _timestamp(), "finished_at": None, "duration_seconds": None, "status": "running", "error": None}
+        entry = {"trial_id": playbook.trial_id, "playbook_name": playbook.playbook_name, "param_space_mode": playbook.param_space_mode, "input_params": copy.deepcopy(playbook.params), "resolved_params": copy.deepcopy(playbook.resolved_params), "output_params": {}, "output_notebook": playbook.output_relative.as_posix(), "output_html": playbook.output_html_relative.as_posix(), "output_markdown": playbook.output_markdown_relative.as_posix(), "output_path": playbook.output_relative.as_posix(), "started_at": _timestamp(), "finished_at": None, "duration_seconds": None, "status": "running", "error": None}
         self.data["trials"].append(entry)
         self.save()
         return entry
@@ -559,6 +586,7 @@ class Playbook:
         self.enabled = config.get("enabled", True)
         if not isinstance(self.enabled, bool):
             raise ValueError(f"enabled must be boolean for {self.playbook_name!r}")
+        self.param_space_mode = config.get("_v03_param_space_mode")
         configured = config.get("playbook_params", {}) if params is None else params
         if not isinstance(configured, Mapping):
             raise ValueError(f"playbook_params must be a table for {self.playbook_name!r}")
@@ -918,6 +946,7 @@ class ZemiComponent:
                                max_samples=config.get("max_samples"), seed=config.get("seed"), block_size=config.get("block_size"),
                                objective_metric=objective["metric"], direction=objective["direction"])
         parent = {"playbook_trial_id": playbook.playbook_id, "playbook_id": playbook.playbook_id,
+                  "param_space_mode": playbook.param_space_mode,
                   "started_at": _timestamp(), "finished_at": None, "status": "running", "samples": [],
                   "objective": objective, "ranking": [], "best_sample": None}
         self.report.data.setdefault("job_trial", {"job_trial_id": self.run_directory.name, "playbook_trials": []})["playbook_trials"].append(parent)
@@ -1090,6 +1119,8 @@ def _output_markdown_table(output_params: Mapping[str, Any]) -> str:
 
 def _trial_summary_text(trial: Mapping[str, Any]) -> str:
     parts = [str(trial.get("trial_id") or trial.get("playbook_name") or "Trial")]
+    if trial.get("param_space_mode"):
+        parts.append(f"ParamSpace mode: {trial['param_space_mode']}")
     for name, value in trial.get("input_params", {}).items():
         if name in _SERVICE_INPUT_PARAMS or not isinstance(value, (str, int, float, bool)):
             continue
@@ -1224,6 +1255,7 @@ def _dataset_markdown(data):
     lines = []
     for trial in data.get("job_trial", {}).get("playbook_trials", []):
         lines.extend(("", f"## Dataset optimization: {_markdown_cell(trial['playbook_id'])}", "",
+                      f"ParamSpace mode: `{trial.get('param_space_mode', 'sampler')}`", "",
                       f"Best sample: `{trial['best_sample']}`", "",
                       "Ranking: " + ", ".join(trial["ranking"]), ""))
         for sample in trial["samples"]:

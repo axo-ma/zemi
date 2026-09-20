@@ -87,6 +87,7 @@ id = "summarize-local"
 path = "playbook.ipynb"
 arsenal = "local"
 enabled = true
+param_space_mode = "sampler"
 
 [playbooks.params]
 __include__ = { ref = "component.params.generation" }
@@ -119,6 +120,7 @@ id = "extract-remote"
 path = "playbook_gbnf.ipynb"
 arsenal = "remote"
 enabled = true
+param_space_mode = "sampler"
 
 [playbooks.params]
 __include__ = [
@@ -191,9 +193,26 @@ namespaces. Duplicate ids are therefore forbidden.
   MUST exist. This explicit edge replaces containment-based or inferred parent
   selection.
 - `enabled` (optional boolean or `select` wrapper, default `true`).
+- `param_space_mode` (conditionally required enum or `select` wrapper): exactly
+  `"start_only"` or `"sampler"`. It MUST be present when `params` resolves to
+  one or more `values`/`range` dimensions or when `sampler` is configured. A
+  `select` wrapper is resolved once while loading the job and becomes the fixed
+  mode; it never creates a ParamSpace dimension.
 - `params` (optional table): user parameters and the playbook `ParamSpace`.
-- `sampler` (optional table): sampling policy and SampleTrial definition. If
-  absent, ZEMI executes the single start/fixed sample once.
+- `sampler` (optional table): sampling policy and SampleTrial definition. It is
+  required exactly when the resolved `param_space_mode` is `"sampler"`.
+
+`param_space_mode = "start_only"` builds and executes exactly one ParamSample:
+the `start` value of every variable dimension plus every fixed parameter. It is
+intended for ordinary one-off execution, troubleshooting, and smoke tests. It
+MUST NOT have a `sampler` section. `param_space_mode = "sampler"` passes the
+complete ParamSpace to the configured sampler and executes its
+sampling/optimization lifecycle. It MUST have a `sampler` section.
+
+When all resolved playbook parameters are fixed and no sampler exists,
+`param_space_mode` MAY be omitted and is equivalent to `"start_only"`. There is
+no implicit fallback for a variable ParamSpace: omitting the mode is an error,
+not a request to run only the start sample.
 
 ### 3.5 `sampler`
 
@@ -251,6 +270,26 @@ resolution. TOML declaration order is preserved. `ParamSample` is one immutable
 mapping of every resolved playbook parameter to a concrete value. Fixed values
 are included in every ParamSample.
 
+For example, a troubleshooting run can retain the complete search space while
+executing only its declared start point:
+
+```toml
+[[playbooks]]
+id = "detect"
+path = "detect.ipynb"
+arsenal = "local"
+param_space_mode = "start_only"
+
+[playbooks.params]
+threshold = { range = { min = 0.1, max = 0.9, step = 0.1 }, start = 0.5 }
+```
+
+The mode itself can be chosen interactively without adding a dimension:
+
+```toml
+param_space_mode = { select = ["start_only", "sampler"] }
+```
+
 The existing interactive wrappers remain distinct:
 
 - `{ select = [...] }` chooses one value once while loading the job and does not
@@ -279,9 +318,12 @@ Resolution is deterministic:
    document order.
 7. Within one table, apply `__include__` entries left-to-right; later includes
    replace earlier keys, then local keys replace all included keys.
-8. Resolve `select` and `input` once, validate variable wrappers, and construct
-   ParamSpace and its start ParamSample.
-9. For each proposal, overlay only the sampled dimension values onto the fixed
+8. Resolve `select` and `input` once, including `param_space_mode`, then validate
+   variable wrappers and mode/sampler consistency and construct ParamSpace and
+   its start ParamSample.
+9. In `start_only` mode execute only the start ParamSample; in `sampler` mode
+   pass ParamSpace to the configured sampler.
+10. For each sampler proposal, overlay only the sampled dimension values onto the fixed
    resolved playbook params.
 
 References are deep-copied. Missing paths, traversal through non-tables, cycles,
@@ -300,7 +342,7 @@ The single normative hierarchy is:
 - `SampleTrial`: one ParamSample evaluated against the complete dataset.
 - `PlaybookRun`: one execution of that playbook for one dataset item.
 
-For each PlaybookTrial the conceptual outer loop is:
+For each `sampler` PlaybookTrial the conceptual outer loop is:
 
 ```text
 sample = sampler.propose(history)
@@ -345,6 +387,9 @@ id. Besides the field rules above, ZEMI MUST reject:
 - missing parent Arsenal references;
 - absolute filesystem paths in configuration;
 - unsupported strategy, direction, adapter shape, or parameter wrapper;
+- a variable ParamSpace without `param_space_mode`;
+- `param_space_mode = "sampler"` without `sampler`, `sampler` without that
+  mode, and `sampler` combined with `param_space_mode = "start_only"`;
 - duplicate ParamSamples proposed by a sampler;
 - evaluator results without the objective metric.
 
@@ -374,6 +419,13 @@ Canonical mappings are:
   tool, never silently at canonical validation time)
 - `playbook_params` → `params`
 - `{ each = [...] }` → `{ values = [...], start = <explicit value> }`
+
+Migration tools and manual migrations MUST also choose an explicit
+`param_space_mode` whenever the migrated playbook contains `values` or `range`.
+Use `"start_only"` to preserve a deliberate single-start troubleshooting run,
+or `"sampler"` together with `[playbooks.sampler]` for search. Earlier behavior
+where a variable ParamSpace without a sampler silently ran only its start sample
+is intentionally rejected because it hid configuration mistakes.
 
 The 0.3 loader SHOULD accept the old complete document shape during one
 compatibility window, normalize it before canonical validation, and emit a

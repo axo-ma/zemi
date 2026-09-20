@@ -20,13 +20,14 @@ _TOP_KEYS = {"system", "component", "arsenals", "playbooks"}
 _SYSTEM_KEYS = {"version", "params"}
 _COMPONENT_KEYS = {"name", "stop_on_error", "params"}
 _ARSENAL_KEYS = {"id", "config_path", "lifecycle", "params"}
-_PLAYBOOK_KEYS = {"id", "path", "arsenal", "enabled", "params", "sampler"}
+_PLAYBOOK_KEYS = {"id", "path", "arsenal", "enabled", "param_space_mode", "params", "sampler"}
 _SAMPLER_KEYS = {"strategy", "max_samples", "seed", "block_size", "sample_trial"}
 _TRIAL_KEYS = {"dataset", "evaluator", "objective", "run"}
 _DATASET_KEYS = {"adapter", "path", "params"}
 _EVALUATOR_KEYS = {"adapter", "params"}
 _OBJECTIVE_KEYS = {"metric", "direction"}
 _STRATEGIES = {"grid", "random", "coordinate", "block_coordinate"}
+_PARAM_SPACE_MODES = {"start_only", "sampler"}
 
 
 def _json_copy(value: Any, label: str) -> Any:
@@ -69,6 +70,25 @@ def _params(value: Any, label: str) -> dict[str, Any]:
     result = _table(value, label)
     _json_copy(result, label)
     return result
+
+
+def _param_space_mode(value: Any, label: str) -> str | dict[str, Any]:
+    if isinstance(value, str):
+        if value not in _PARAM_SPACE_MODES:
+            raise ValueError(f'{label} must be "start_only" or "sampler"')
+        return value
+    wrapper = _table(value, label)
+    if set(wrapper) != {"select"}:
+        raise ValueError(f"{label} select wrapper must contain exactly the select key")
+    choices = wrapper["select"]
+    if not isinstance(choices, list) or not choices:
+        raise ValueError(f"{label}.select must be a non-empty array")
+    invalid = [choice for choice in choices if choice not in _PARAM_SPACE_MODES]
+    if invalid:
+        raise ValueError(
+            f'{label}.select choices must be "start_only" or "sampler"; got {invalid[0]!r}'
+        )
+    return wrapper
 
 
 def validate_document(document: Mapping[str, Any]) -> dict[str, Any]:
@@ -129,9 +149,33 @@ def validate_document(document: Mapping[str, Any]) -> dict[str, Any]:
             raise ValueError(f"{label}.arsenal references missing Arsenal {parent!r}")
         if not isinstance(item.get("enabled", True), (bool, Mapping)):
             raise ValueError(f"{label}.enabled must be boolean or a select wrapper")
+        mode = item.get("param_space_mode")
+        if mode is not None:
+            item["param_space_mode"] = _param_space_mode(mode, f"{label}.param_space_mode")
         item["params"] = _params(item.get("params", {}), f"{label}.params")
+        dimensions = ParamSpace.from_params(item["params"], f"{label}.params").dimensions
         if "sampler" in item:
             item["sampler"] = _validate_sampler(item["sampler"], f"{label}.sampler")
+        literal_mode = item.get("param_space_mode")
+        if isinstance(literal_mode, str):
+            if literal_mode == "sampler" and "sampler" not in item:
+                raise ValueError(
+                    f'{label}.param_space_mode = "sampler" requires {label}.sampler'
+                )
+            if literal_mode == "start_only" and "sampler" in item:
+                raise ValueError(
+                    f'{label}.sampler is not allowed when {label}.param_space_mode = "start_only"'
+                )
+        elif literal_mode is None and "sampler" in item:
+            raise ValueError(
+                f'{label}.param_space_mode must be "sampler" when {label}.sampler is configured'
+            )
+        elif literal_mode is None and dimensions:
+            names = ", ".join(dimension.name for dimension in dimensions)
+            raise ValueError(
+                f"{label}.param_space_mode is required because {label}.params "
+                f"defines variable dimensions: {names}"
+            )
         normalized_playbooks.append(item)
     return {"system": system, "component": component, "arsenals": normalized_arsenals, "playbooks": normalized_playbooks}
 

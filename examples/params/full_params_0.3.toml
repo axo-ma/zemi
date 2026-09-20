@@ -41,6 +41,7 @@ id = "summarize-local"
 path = "playbook.ipynb"
 arsenal = "local"
 enabled = true
+param_space_mode = "sampler"
 
 [playbooks.params]
 __include__ = { ref = "component.params.generation" }
@@ -73,6 +74,7 @@ id = "extract-remote"
 path = "playbook_gbnf.ipynb"
 arsenal = "remote"
 enabled = true
+param_space_mode = "sampler"
 
 [playbooks.params]
 __include__ = [

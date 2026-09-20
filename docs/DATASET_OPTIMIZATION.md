@@ -7,6 +7,12 @@ the result, and proposes again. Coordinate strategies recompute neighborhoods
 around the best observed sample; ties retain the earlier sample. Search stops
 when that neighborhood has no unseen candidates or the sample limit is reached.
 
+Dataset optimization runs only when the playbook explicitly sets
+`param_space_mode = "sampler"` and defines `[playbooks.sampler]`. Use
+`param_space_mode = "start_only"` to execute exactly the declared start/fixed
+sample without loading a dataset or evaluator. A variable ParamSpace without an
+explicit mode is rejected instead of silently becoming a one-sample run.
+
 See [Params 0.3](ZEMI_PARAMS_0.3.md) for the normative structure and resolution.
 
 ## Adapter contracts
