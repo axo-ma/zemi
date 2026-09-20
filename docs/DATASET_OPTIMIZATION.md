@@ -106,9 +106,16 @@ metrics/feedback, ranking and best sample. `main.md` and `report.md` render the
 same dataset results. Runtime dataset inputs can contain absolute resolved paths;
 this does not change the rule for paths in source TOML.
 
-For held-out evaluation, configure the test dataset and instantiate
-`ZemiComponent(test_toml, sample_overrides={playbook_id: best_params})`.
-An override must include exactly the configured parameter keys, preserve fixed
-values and select declared domain values. It freezes sampling to one sample.
-The experiment owns selection of the validation report and test split; ZEMI
-owns the execution loop for both. Never optimize on test metrics.
+For held-out evaluation, configure the test dataset and instantiate the
+component from a completed validation report:
+
+```python
+component = ZemiComponent.from_best_report(test_toml, validation_report)
+```
+
+The library resolves every successful playbook's `best_sample`, then validates
+the reported parameters against the test configuration. Fixed values must be
+unchanged and variable values must belong to their declared domains. Sampling
+is frozen to one replay sample. `sample_overrides` remains the lower-level API
+for callers that already have a validated parameter mapping. Never optimize on
+test metrics.

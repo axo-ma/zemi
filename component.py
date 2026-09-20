@@ -687,6 +687,40 @@ class Playbook:
 class ZemiComponent:
     """Load component parameters and own expanded playbook trial lifecycle."""
 
+    @classmethod
+    def from_best_report(
+        cls,
+        params_file: str | Path | Sequence[str | Path],
+        report_file: str | Path,
+    ) -> "ZemiComponent":
+        """Create a component that replays each reported playbook's best sample."""
+        report_path = Path(report_file).expanduser().resolve()
+        try:
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as error:
+            raise ValueError(f"best sample report could not be read: {report_path}: {error}") from error
+        playbook_trials = report.get("job_trial", {}).get("playbook_trials")
+        if not isinstance(playbook_trials, list) or not playbook_trials:
+            raise ValueError("best sample report contains no playbook trials")
+        overrides: dict[str, Mapping[str, Any]] = {}
+        for index, trial in enumerate(playbook_trials):
+            if not isinstance(trial, Mapping):
+                raise ValueError(f"best sample report playbook_trials[{index}] must be an object")
+            playbook_id = trial.get("playbook_id")
+            best_id = trial.get("best_sample")
+            samples = trial.get("samples")
+            if not isinstance(playbook_id, str) or not playbook_id:
+                raise ValueError(f"best sample report playbook_trials[{index}].playbook_id is invalid")
+            if playbook_id in overrides:
+                raise ValueError(f"best sample report contains duplicate playbook id {playbook_id!r}")
+            if trial.get("status") != "succeeded" or not isinstance(best_id, str) or not isinstance(samples, list):
+                raise ValueError(f"best sample report has no successful best sample for playbook {playbook_id!r}")
+            matches = [sample for sample in samples if isinstance(sample, Mapping) and sample.get("sample_trial_id") == best_id]
+            if len(matches) != 1 or not isinstance(matches[0].get("params"), Mapping):
+                raise ValueError(f"best sample report cannot resolve {best_id!r} for playbook {playbook_id!r}")
+            overrides[playbook_id] = copy.deepcopy(dict(matches[0]["params"]))
+        return cls(params_file, sample_overrides=overrides)
+
     def __init__(self, params_file: str | Path | Sequence[str | Path] | None = None, *, sample_overrides: Mapping[str, Mapping[str, Any]] | None = None) -> None:
         self.root = env.path.comp.root; self.params_path = _select_params_path(self.root, params_file)
         with self.params_path.open("rb") as file:
