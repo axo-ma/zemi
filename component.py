@@ -937,7 +937,16 @@ class ZemiComponent:
                 raise ValueError(f"playbooks.{playbook.playbook_id}.sampler.sample_trial: {error}") from error
         return prepared
 
-    def _run_dataset(self, playbook, prepared):
+    @staticmethod
+    def _activate_managed_model(session, params) -> None:
+        model_name = params.get("model_name")
+        if model_name is None:
+            return
+        if not isinstance(model_name, str) or not model_name:
+            raise ValueError("model_name must be a non-empty string")
+        session.model(model_name)
+
+    def _run_dataset(self, playbook, prepared, session=None):
         from .dataset import RunContext
         items, evaluate, adapter = prepared
         config = playbook.sampler_config
@@ -959,6 +968,8 @@ class ZemiComponent:
         def run(sample, item):
             nonlocal serial
             serial += 1
+            if session is not None:
+                self._activate_managed_model(session, sample.values)
             started = _timestamp()
             record = {"playbook_run_id": f"{playbook.playbook_id}-run-{serial:06d}", "item": copy.deepcopy(item),
                       "prediction": None, "error": None, "started_at": started, "status": "running"}
@@ -1043,8 +1054,10 @@ class ZemiComponent:
                 for playbook in enabled_playbooks:
                     try:
                         if playbook.sampler_config:
-                            self._run_dataset(playbook, prepared[playbook.playbook_id])
+                            self._run_dataset(playbook, prepared[playbook.playbook_id], session=session)
                         else:
+                            if session is not None:
+                                self._activate_managed_model(session, playbook.params)
                             playbook.run()
                     except Exception as error:
                         first_error = first_error or error; self.report.record_failure(error)
