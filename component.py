@@ -19,7 +19,7 @@ from typing import Any, Mapping
 
 from . import env
 from .playbook import PLAYBOOK_OUTPUT_MIME, _output_context, validate_output_params
-from .params import ParamSample, ParamSampler, ParamSpace, SampleTrialResult, run_playbook_trial, validate_document
+from .params import ParamSample, ParamSampler, ParamSpace, validate_document
 
 
 def _canonical_runtime(document: Mapping[str, Any]) -> dict[str, Any]:
@@ -111,33 +111,38 @@ def _canonical_runtime(document: Mapping[str, Any]) -> dict[str, Any]:
                     f'playbooks.{playbook["id"]}.sampler.sample_trial is required when '
                     f'param_space_mode = "sampler"'
                 )
+            if mode == "sampler" and "objective" not in sampler_config:
+                raise ValueError(
+                    f'playbooks.{playbook["id"]}.sampler.objective is required when '
+                    f'param_space_mode = "sampler"'
+                )
             samples = [space.start]
         if sampler_config and "sample_trial" in sampler_config:
             trial_config = sampler_config["sample_trial"]
-            trial_config["dataset"]["params"] = resolved_params(
-                trial_config["dataset"]["params"],
-                f"playbooks.{playbook['id']}.sampler.sample_trial.dataset.params",
-                playbook["id"],
-            )
-            trial_config["evaluator"]["params"] = resolved_params(
-                trial_config["evaluator"]["params"],
-                f"playbooks.{playbook['id']}.sampler.sample_trial.evaluator.params",
-                playbook["id"],
-            )
-            if "run" in trial_config:
-                trial_config["run"]["params"] = resolved_params(
-                    trial_config["run"]["params"],
-                    f"playbooks.{playbook['id']}.sampler.sample_trial.run.params", playbook["id"])
+            if "_legacy" in trial_config:
+                legacy = trial_config["_legacy"]
+                for section in ("dataset", "evaluator", "run"):
+                    if section in legacy:
+                        legacy[section]["params"] = resolved_params(
+                            legacy[section]["params"],
+                            f"playbooks.{playbook['id']}.sampler.sample_trial.{section}.params",
+                            playbook["id"],
+                        )
+            else:
+                trial_config["params"] = resolved_params(
+                    trial_config["params"],
+                    f"playbooks.{playbook['id']}.sampler.sample_trial.params",
+                    playbook["id"],
+                )
         if sampler_config:
-            objective = sampler_config.get("sample_trial", {}).get("objective", {})
             sampler = ParamSampler(
                 space,
                 sampler_config["strategy"],
                 max_samples=sampler_config.get("max_samples"),
                 seed=sampler_config.get("seed"),
                 blocks=sampler_config.get("blocks"),
-                objective_metric=objective.get("metric", "objective"),
-                direction=objective.get("direction", "maximize"),
+                objective_metric=sampler_config.get("objective", {}).get("metric", "score"),
+                direction=sampler_config.get("objective", {}).get("direction", "maximize"),
                 _label=f"playbooks.{playbook['id']}.sampler",
             )
         arsenal_id = playbook.get("arsenal")
@@ -404,7 +409,9 @@ def _resolve_playbook_params(
             if mode == "input":
                 selected = _resolve_input(value, f"{label}.{name}", playbook_name)
                 literal[name] = selected
-                resolved[name] = {"source": "input", "value": copy.deepcopy(selected)}
+                secret = isinstance(value.get("input"), Mapping) and value["input"].get("secret") is True
+                resolved[name] = {"source": "input", "value": "***" if secret else copy.deepcopy(selected),
+                                  "secret": secret}
                 continue
             choices = value[mode]
             if not isinstance(choices, list):
@@ -478,12 +485,13 @@ def _resolve_nested_inputs(value: Any, label: str, playbook_name: str) -> Any:
 
 
 def _resolve_input(wrapper: Mapping[str, Any], label: str, playbook_name: str) -> Any:
+    from .inputs import InputError, InputStore
     specification = wrapper["input"]
     if isinstance(specification, str):
         specification = {"prompt": specification}
     if not isinstance(specification, Mapping):
         raise ValueError(f"{label}.input must be a prompt string or a table")
-    allowed = {"prompt", "type", "default"}
+    allowed = {"prompt", "type", "default", "suggested", "env", "validate", "secret"}
     unexpected = set(specification) - allowed
     if unexpected:
         raise ValueError(f"{label}.input contains unsupported keys: {', '.join(sorted(unexpected))}")
@@ -493,15 +501,20 @@ def _resolve_input(wrapper: Mapping[str, Any], label: str, playbook_name: str) -
         raise ValueError(f"{label}.input.prompt must be a non-empty string")
     if value_type not in {"string", "path", "integer", "float", "boolean", "json"}:
         raise ValueError(f"{label}.input.type must be string, path, integer, float, boolean, or json")
-    suffix = f" [{specification['default']}]" if "default" in specification else ""
+    if "env" in specification and (not isinstance(specification["env"], str) or not specification["env"]):
+        raise ValueError(f"{label}.input.env must be a non-empty persistent input key")
+    if "secret" in specification and not isinstance(specification["secret"], bool):
+        raise ValueError(f"{label}.input.secret must be boolean")
+    store_spec = dict(specification)
+    if "default" in store_spec and "suggested" not in store_spec:
+        default = store_spec.pop("default")
+        store_spec["suggested"] = json.dumps(default, ensure_ascii=False) if value_type == "json" else str(default)
     try:
-        answer = input(f"{prompt}{suffix}: ")
-    except EOFError:
+        answer = InputStore().resolve(store_spec)
+    except InputError:
         raise RuntimeError(
             f"Cannot input a value for playbook {playbook_name!r} at {label}: interactive input is unavailable"
         ) from None
-    if not answer and "default" in specification:
-        return _json_value(specification["default"], f"{label}.input.default")
     try:
         if value_type in {"string", "path"}:
             return answer
@@ -550,11 +563,19 @@ class ComponentReport:
         self.main_path = run_directory / "main.md"
         self.markdown_path = run_directory / "report.md"
         self.run_directory = run_directory
+        self._sample_trial_markdown: dict[str, str] = {}
+        self._secret_values: set[str] = set()
         trials: list[dict[str, Any]] = []
         self.data: dict[str, Any] = {"schema_version": 1, "component_name": component_name, "component_root": str(component_root), "params_file": params_file, "pipeline_params": copy.deepcopy(dict(pipeline_params)), "started_at": _timestamp(), "finished_at": None, "status": "running", "trials": trials, "playbooks": trials, "summary": {}}
 
     def start_trial(self, playbook: "Playbook") -> dict[str, Any]:
-        entry = {"trial_id": playbook.trial_id, "playbook_name": playbook.playbook_name, "arsenal": playbook.arsenal_id, "param_space_mode": playbook.param_space_mode, "input_params": copy.deepcopy(playbook.params), "resolved_params": copy.deepcopy(playbook.resolved_params), "output_params": {}, "output_notebook": playbook.output_relative.as_posix(), "output_html": playbook.output_html_relative.as_posix(), "output_markdown": playbook.output_markdown_relative.as_posix(), "output_path": playbook.output_relative.as_posix(), "started_at": _timestamp(), "finished_at": None, "duration_seconds": None, "status": "running", "error": None}
+        input_params = copy.deepcopy(playbook.params)
+        for name in playbook.secret_param_names:
+            if name in input_params:
+                if str(input_params[name]):
+                    self._secret_values.add(str(input_params[name]))
+                input_params[name] = "***"
+        entry = {"trial_id": playbook.trial_id, "playbook_name": playbook.playbook_name, "arsenal": playbook.arsenal_id, "param_space_mode": playbook.param_space_mode, "input_params": input_params, "resolved_params": copy.deepcopy(playbook.resolved_params), "output_params": {}, "output_notebook": playbook.output_relative.as_posix(), "output_html": playbook.output_html_relative.as_posix(), "output_markdown": playbook.output_markdown_relative.as_posix(), "output_path": playbook.output_relative.as_posix(), "started_at": _timestamp(), "finished_at": None, "duration_seconds": None, "status": "running", "error": None}
         self.data["trials"].append(entry)
         self.save()
         return entry
@@ -574,21 +595,27 @@ class ComponentReport:
     def record_failure(self, error: BaseException) -> None:
         self.data["status"] = "failed"; self.data["error"] = _error_data(error); self.save()
 
+    def set_sample_trial_markdown(self, playbook_id: str, markdown: str) -> None:
+        for secret in self._secret_values:
+            markdown = markdown.replace(secret, "***")
+        self._sample_trial_markdown[playbook_id] = markdown
+
     def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         if "job_trial" in self.data:
             self.data["job_trial"].update({key: self.data[key] for key in ("status", "started_at", "finished_at")})
         self.data["summary"] = _summarize_trials(self.data["trials"])
+        rendered_data = _redact_secrets(self.data, self._secret_values)
         json_tmp = self.path.with_name(".report.json.tmp")
-        json_tmp.write_text(json.dumps(self.data, ensure_ascii=False, indent=2, allow_nan=False) + "\n", encoding="utf-8")
+        json_tmp.write_text(json.dumps(rendered_data, ensure_ascii=False, indent=2, allow_nan=False) + "\n", encoding="utf-8")
         os.replace(json_tmp, self.path)
         main_tmp = self.main_path.with_name(".main.md.tmp")
-        main_tmp.write_text(_main_markdown(self.data), encoding="utf-8")
+        main_tmp.write_text(_main_markdown(rendered_data, self._sample_trial_markdown), encoding="utf-8")
         os.replace(main_tmp, self.main_path)
         markdown_tmp = self.markdown_path.with_name(".report.md.tmp")
-        markdown_tmp.write_text(_report_markdown(self.data), encoding="utf-8")
+        markdown_tmp.write_text(_report_markdown(rendered_data, self._sample_trial_markdown), encoding="utf-8")
         os.replace(markdown_tmp, self.markdown_path)
-        for trial in self.data["trials"]:
+        for trial in rendered_data["trials"]:
             relative = trial.get("output_markdown")
             if not relative:
                 continue
@@ -596,6 +623,19 @@ class ComponentReport:
             output_path.parent.mkdir(parents=True, exist_ok=True)
             output_tmp = output_path.with_name(f".{output_path.name}.tmp")
             output_tmp.write_text(_trial_markdown(trial), encoding="utf-8")
+            os.replace(output_tmp, output_path)
+        for trial in rendered_data.get("job_trial", {}).get("playbook_trials", []):
+            relative = trial.get("report_markdown")
+            if not relative:
+                continue
+            output_path = self.run_directory / relative
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_tmp = output_path.with_name(f".{output_path.name}.tmp")
+            section = self._sample_trial_markdown.get(trial["playbook_id"], "")
+            document = {"job_trial": {"playbook_trials": [trial]}}
+            output_tmp.write_text(f"# {trial['playbook_id']} SampleTrial report\n" +
+                                  _sampling_markdown(document, {trial["playbook_id"]: section}),
+                                  encoding="utf-8")
             os.replace(output_tmp, output_path)
 
 
@@ -615,6 +655,8 @@ class Playbook:
             raise ValueError(f"playbook_params must be a table for {self.playbook_name!r}")
         self.params = copy.deepcopy(dict(configured))
         self.resolved_params = copy.deepcopy(dict(resolved_params or {}))
+        self.secret_param_names = {name for name, metadata in self.resolved_params.items()
+                                   if isinstance(metadata, Mapping) and metadata.get("secret") is True}
         relative = Path(self.playbook_name)
         if relative.is_absolute() or ".." in relative.parts:
             raise ValueError(f"Invalid playbook_name: {self.playbook_name!r}")
@@ -938,29 +980,29 @@ class ZemiComponent:
         self.playbooks = tuple(playbooks); self._closed = False; self.report.save()
 
     def _prepare_datasets(self):
-        from .dataset import resolve_adapter
+        from .sample_trial import resolve_sample_trial
         prepared = {}
         for playbook in self.playbooks:
             if not playbook.enabled or playbook.param_space_mode != "sampler":
                 continue
             config = playbook.sampler_config["sample_trial"]
             try:
-                loader = resolve_adapter("dataset", config["dataset"]["adapter"])
-                evaluator = resolve_adapter("evaluator", config["evaluator"]["adapter"])
-                runner = resolve_adapter("run", config.get("run", {}).get("adapter", "notebook"))
-                items = list(loader(path=config["dataset"].get("path"), params=config["dataset"]["params"]))
+                sample_trial = resolve_sample_trial(config, execute=lambda **kwargs: {})
+                items = list(sample_trial.load_dataset())
                 if not items:
                     raise ValueError("dataset must not be empty")
                 ids = set()
                 for index, item in enumerate(items):
-                    if not isinstance(item, dict) or "input" not in item:
-                        raise ValueError(f"dataset[{index}] must be an object with input")
-                    item.setdefault("id", index)
-                    key = json.dumps(item["id"], sort_keys=True)
+                    if isinstance(item, dict):
+                        item.setdefault("id", index)
+                        identity = item["id"]
+                    else:
+                        identity = index
+                    key = json.dumps(identity, sort_keys=True)
                     if key in ids:
                         raise ValueError(f"dataset[{index}].id is duplicated")
                     ids.add(key)
-                prepared[playbook.playbook_id] = (items, evaluator, runner)
+                prepared[playbook.playbook_id] = (items, sample_trial)
             except Exception as error:
                 raise ValueError(f"playbooks.{playbook.playbook_id}.sampler.sample_trial: {error}") from error
         return prepared
@@ -975,11 +1017,9 @@ class ZemiComponent:
         session.model(model_name)
 
     def _run_dataset(self, playbook, prepared, session=None):
-        from .dataset import RunContext
-        items, evaluate, adapter = prepared
+        items, sample_trial = prepared
         config = playbook.sampler_config
-        trial_config = config["sample_trial"]
-        objective = trial_config["objective"]
+        objective = config["objective"]
         sampler = ParamSampler(ParamSpace.from_params(playbook.config["_v03_space"]), config["strategy"],
                                max_samples=config.get("max_samples"), seed=config.get("seed"), blocks=config.get("blocks"),
                                objective_metric=objective["metric"], direction=objective["direction"],
@@ -987,14 +1027,15 @@ class ZemiComponent:
         parent = {"playbook_trial_id": playbook.playbook_id, "playbook_id": playbook.playbook_id,
                   "arsenal": playbook.arsenal_id,
                   "param_space_mode": playbook.param_space_mode,
+                  "report_markdown": f"sample_trials/{playbook.playbook_id}.report.md",
                   "sampler": {key: copy.deepcopy(config[key]) for key in ("strategy", "max_samples", "seed", "blocks") if key in config},
+                  "objective": copy.deepcopy(objective),
                   "started_at": _timestamp(), "finished_at": None, "status": "running", "samples": [],
-                  "objective": objective, "ranking": [], "best_sample": None}
+                  "ranking": [], "best_sample": None}
         self.report.data.setdefault("job_trial", {"job_trial_id": self.run_directory.name, "playbook_trials": []})["playbook_trials"].append(parent)
-        context = RunContext()
         serial = 0
 
-        def run(sample, item):
+        def execute_item(*, playbook, sample, item, context, runner=None, runner_params=None):
             nonlocal serial
             serial += 1
             if session is not None:
@@ -1009,7 +1050,9 @@ class ZemiComponent:
                     if key in playbook.params:
                         params[key] = playbook.params[key]
                 params.update(copy.deepcopy(inputs))
-                child = Playbook(self, playbook.config, config_index=self.playbooks.index(playbook), trial_index=serial - 1, params=params)
+                child = Playbook(self, playbook.config, config_index=self.playbooks.index(playbook),
+                                 trial_index=serial - 1, params=params,
+                                 resolved_params=playbook.resolved_params)
                 try:
                     child.run()
                 finally:
@@ -1020,45 +1063,74 @@ class ZemiComponent:
                 return entry["output_params"]
 
             try:
-                record["prediction"] = validate_output_params(adapter(sample, copy.deepcopy(item["input"]), execute=execute,
-                                                        context=context, params=trial_config.get("run", {}).get("params", {})))
+                item_input = item.get("input") if isinstance(item, Mapping) and "input" in item else item
+                if runner is None:
+                    prediction = execute({"dataset_input": copy.deepcopy(item_input)})
+                else:
+                    prediction = runner(sample, copy.deepcopy(item_input), execute=execute,
+                                        context=context, params=runner_params or {})
+                record["prediction"] = validate_output_params(prediction)
                 record["status"] = "succeeded"
             except Exception as error:
                 record.update(error=_error_data(error), status="failed")
             record["finished_at"] = _timestamp()
             return record
 
-        def evaluator(sample, runs):
-            context.close()
-            return evaluate(SampleTrialResult(sample, runs, {}), params=trial_config["evaluator"]["params"])
+        sample_trial.execute = execute_item
 
-        def save_sample(trial, result):
-            sample_id = f"{playbook.playbook_id}-sample-{len(result.history):04d}"
-            parent["samples"].append({"sample_trial_id": sample_id, "proposal_ordinal": len(result.history),
-                "params": dict(trial.sample.values), "runs": trial.runs, "metrics": trial.metrics, "feedback": trial.feedback,
-                "objective_value": trial.metrics.get(objective["metric"]) if trial.error is None else None,
-                "error": trial.error, "status": "failed" if trial.error else "succeeded",
+        history = []
+
+        def save_sample(trial):
+            sample_id = f"{playbook.playbook_id}-sample-{len(history):04d}"
+            parent["samples"].append({"sample_trial_id": sample_id, "proposal_ordinal": len(history),
+                "params": {key: ("***" if key in playbook.secret_param_names else value)
+                           for key, value in trial.sample.values.items()},
+                "runs": trial.runs, "metrics": trial.metrics, "feedback": trial.feedback,
+                "score": trial.score, "objective_value": trial.score,
+                "error": trial.error, "status": trial.status, "artifacts": trial.artifacts,
                 "run_errors": sum(r.get("status") == "failed" for r in trial.runs),
                 "started_at": trial.started_at, "finished_at": trial.finished_at})
             for record in trial.runs:
                 record["sample_trial_id"] = sample_id
             ranked = sorted((s for s in parent["samples"] if s["error"] is None),
-                            key=lambda s: s["objective_value"], reverse=objective["direction"] == "maximize")
+                            key=lambda s: s["score"], reverse=objective["direction"] == "maximize")
             parent["ranking"] = [s["sample_trial_id"] for s in ranked]
             parent["best_sample"] = parent["ranking"][0] if ranked else None
+            parent["best_params"] = ranked[0]["params"] if ranked else None
+            self.report.save()  # Persist the generic result before domain rendering.
+            best = sampler.best_sample(history)
+            self.report.set_sample_trial_markdown(
+                playbook.playbook_id,
+                sample_trial.render_report(history, parent["sampler"], best),
+            )
             self.report.save()
 
         try:
-            result = run_playbook_trial(sampler=sampler, dataset=items, run=run, evaluator=evaluator,
-                metric=objective["metric"], direction=objective["direction"], on_sample=save_sample)
-            parent["status"] = "failed" if any(s.error for s in result.history) else "succeeded"
+            while (sample := sampler.next_sample(history)) is not None:
+                if sample.key() in {item.sample.key() for item in history}:
+                    raise ValueError("sampler proposed a duplicate ParamSample")
+                started = _timestamp()
+                runs = []
+                try:
+                    runs = sample_trial.run(playbook=playbook, sample=sample, dataset=items)
+                    metrics, feedback = sample_trial.evaluate(runs=runs)
+                    if not isinstance(metrics, Mapping) or objective["metric"] not in metrics:
+                        raise ValueError(f"SampleTrial metrics do not contain objective metric {objective['metric']!r}")
+                    score = metrics[objective["metric"]]
+                    trial = sample_trial.result(sample=sample, runs=runs, score=score, metrics=metrics,
+                                               feedback=feedback, started_at=started, finished_at=_timestamp())
+                except Exception as error:
+                    trial = sample_trial.result(sample=sample, runs=runs, score=None, metrics={},
+                                               error=str(error), started_at=started, finished_at=_timestamp())
+                history.append(trial)
+                save_sample(trial)
+            parent["status"] = "failed" if any(s.error for s in history) else "succeeded"
             if parent["status"] == "failed":
-                raise ValueError(f"PlaybookTrial {playbook.playbook_id}: evaluator failed; see report")
+                raise ValueError(f"PlaybookTrial {playbook.playbook_id}: SampleTrial failed; see report")
         except Exception:
             parent["status"] = "failed"
             raise
         finally:
-            context.close()
             parent["finished_at"] = _timestamp()
             self.report.save()
 
@@ -1203,7 +1275,7 @@ def _markdown_link(label: str, target: object) -> str:
     return f"[{label}]({str(target).replace(' ', '%20')})"
 
 
-def _main_markdown(data: Mapping[str, Any]) -> str:
+def _main_markdown(data: Mapping[str, Any], domain_sections: Mapping[str, str] | None = None) -> str:
     trials = data.get("trials") or data.get("playbooks") or []
     lines = [
         "# ZEMI job report",
@@ -1273,10 +1345,10 @@ def _main_markdown(data: Mapping[str, Any]) -> str:
     else:
         for trial in errors:
             lines.extend((f"### {trial.get('trial_id', 'Trial')}", "", "```json", _display_value(trial.get("error")), "```", ""))
-    return "\n".join(lines) + _dataset_markdown(data)
+    return "\n".join(lines) + _sampling_markdown(data, domain_sections or {})
 
 
-def _report_markdown(data: Mapping[str, Any]) -> str:
+def _report_markdown(data: Mapping[str, Any], domain_sections: Mapping[str, str] | None = None) -> str:
     lines = [
         f"# {html.escape(str(data.get('component_name', 'ZEMI')))} outputs",
         "",
@@ -1293,32 +1365,32 @@ def _report_markdown(data: Mapping[str, Any]) -> str:
         if target:
             lines.extend((f"[Open individual output report]({target})", ""))
         lines.extend((_output_markdown_table(trial.get("output_params", {})), "", "</details>", ""))
-    return "\n".join(lines) + _dataset_markdown(data)
+    return "\n".join(lines) + _sampling_markdown(data, domain_sections or {})
 
 
-def _dataset_markdown(data):
+def _sampling_markdown(data, domain_sections):
     lines = []
     for trial in data.get("job_trial", {}).get("playbook_trials", []):
-        lines.extend(("", f"## Dataset optimization: {_markdown_cell(trial['playbook_id'])}", "",
+        lines.extend(("", f"## Sampling: {_markdown_cell(trial['playbook_id'])}", "",
                       f"ParamSpace mode: `{trial.get('param_space_mode', 'sampler')}`", "",
+                      (_markdown_link("Open detailed SampleTrial report", trial["report_markdown"])
+                       if trial.get("report_markdown") else ""), "",
                       "Sampler:", "", "```json", _display_value(trial.get("sampler", {})), "```", "",
+                      "Objective:", "", "```json", _display_value(trial.get("objective", {})), "```", "",
                       f"Best sample: `{trial['best_sample']}`", "",
                       "Ranking: " + ", ".join(trial["ranking"]), ""))
         for sample in trial["samples"]:
             lines.extend((f"### {sample['sample_trial_id']}", "", f"Status: {sample['status']}", "",
                           "Parameters:", "", "```json", _display_value(sample["params"]), "```", "",
+                          f"Score: `{sample.get('score')}`", "",
                           "Metrics:", "", _output_markdown_table(sample["metrics"]), ""))
             if sample["error"]:
                 lines.extend(("Error: " + html.escape(sample["error"]), ""))
-            details = (sample.get("feedback") or {}).get("items", []) if isinstance(sample.get("feedback"), dict) else []
-            lines.extend(("| Item | Worksheet | Ground truth | Prediction | TP | FP | FN | Precision | Recall | F1 | Error |",
-                          "|---|---|---|---|---:|---:|---:|---:|---:|---:|---|"))
-            for item in details:
-                values = [item["item_id"], item["input"], item["ground_truth"], item["prediction"],
-                          *[item[k] for k in ("tp", "fp", "fn", "precision", "recall", "f1", "error")]]
-                lines.append("| " + " | ".join(_markdown_cell(v) for v in values) + " |")
             lines.extend(("", "<details><summary>All PlaybookRuns and feedback</summary>", "",
                           "```json", _display_value({"runs": sample["runs"], "feedback": sample["feedback"]}), "```", "", "</details>", ""))
+        section = domain_sections.get(trial["playbook_id"])
+        if section:
+            lines.extend(("", section, ""))
     return "\n".join(lines)
 
 def _params_table(params: Mapping[str, Any], name: str) -> dict[str, Any]:
@@ -1326,6 +1398,16 @@ def _params_table(params: Mapping[str, Any], name: str) -> dict[str, Any]:
     if not isinstance(value, Mapping):
         raise ValueError(f"{name} must be a table")
     return copy.deepcopy(dict(value))
+
+
+def _redact_secrets(value: Any, secrets: set[str]) -> Any:
+    if isinstance(value, Mapping):
+        return {key: _redact_secrets(item, secrets) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact_secrets(item, secrets) for item in value]
+    if isinstance(value, tuple):
+        return [_redact_secrets(item, secrets) for item in value]
+    return "***" if secrets and str(value) in secrets else copy.deepcopy(value)
 
 
 def _timestamp() -> str:

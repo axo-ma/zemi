@@ -21,8 +21,9 @@ _SYSTEM_KEYS = {"version", "params"}
 _COMPONENT_KEYS = {"name", "stop_on_error", "params"}
 _ARSENAL_KEYS = {"id", "config_path", "lifecycle", "params"}
 _PLAYBOOK_KEYS = {"id", "path", "arsenal", "enabled", "param_space_mode", "params", "sampler"}
-_SAMPLER_KEYS = {"strategy", "max_samples", "seed", "blocks", "sample_trial"}
-_TRIAL_KEYS = {"dataset", "evaluator", "objective", "run"}
+_SAMPLER_KEYS = {"strategy", "max_samples", "seed", "blocks", "objective", "sample_trial"}
+_TRIAL_KEYS = {"implementation", "path", "params"}
+_LEGACY_TRIAL_KEYS = {"dataset", "evaluator", "objective", "run"}
 _DATASET_KEYS = {"adapter", "path", "params"}
 _EVALUATOR_KEYS = {"adapter", "params"}
 _OBJECTIVE_KEYS = {"metric", "direction"}
@@ -176,6 +177,10 @@ def validate_document(document: Mapping[str, Any]) -> dict[str, Any]:
                 raise ValueError(
                     f'{label}.sampler.sample_trial is required when {label}.param_space_mode = "sampler"'
                 )
+            if literal_mode == "sampler" and "objective" not in item["sampler"]:
+                raise ValueError(
+                    f'{label}.sampler.objective is required when {label}.param_space_mode = "sampler"'
+                )
         elif not _may_resolve_dimensions(item["params"]):
             if "sampler" in item:
                 raise ValueError(f"{label}.sampler is not allowed because {label}.params are all fixed")
@@ -197,6 +202,14 @@ def _validate_sampler(raw: Any, label: str) -> dict[str, Any]:
         raise ValueError(f"{label}.max_samples is required for {strategy}")
     if "seed" in sampler and (not isinstance(sampler["seed"], int) or isinstance(sampler["seed"], bool)):
         raise ValueError(f"{label}.seed must be an integer")
+    if "objective" in sampler:
+        objective = _table(sampler["objective"], f"{label}.objective")
+        _closed(objective, _OBJECTIVE_KEYS, f"{label}.objective")
+        if not isinstance(objective.get("metric"), str) or not objective["metric"]:
+            raise ValueError(f"{label}.objective.metric must be a non-empty string")
+        if objective.get("direction") not in {"maximize", "minimize"}:
+            raise ValueError(f"{label}.objective.direction must be maximize or minimize")
+        sampler["objective"] = objective
     blocks = sampler.get("blocks")
     if strategy == "block_coordinate":
         sampler["blocks"] = _validate_blocks_shape(blocks, f"{label}.blocks")
@@ -205,7 +218,22 @@ def _validate_sampler(raw: Any, label: str) -> dict[str, Any]:
     if "sample_trial" not in sampler:
         return sampler
     trial = _table(sampler["sample_trial"], f"{label}.sample_trial")
-    _closed(trial, _TRIAL_KEYS, f"{label}.sample_trial")
+    if set(trial) <= _TRIAL_KEYS:
+        _closed(trial, _TRIAL_KEYS, f"{label}.sample_trial")
+        implementation = trial.get("implementation")
+        if not isinstance(implementation, str) or not implementation:
+            raise ValueError(f"{label}.sample_trial.implementation must be a non-empty string")
+        if implementation.startswith("@comp/"):
+            if not re.fullmatch(r"@comp/[^:]+\.py:[A-Za-z_][A-Za-z0-9_]*", implementation):
+                raise ValueError(f"{label}.sample_trial.implementation must be a built-in name or @comp/path.py:ClassOrFactory")
+        elif implementation != "table_detection":
+            raise ValueError(f"{label}.sample_trial.implementation: unknown built-in {implementation!r}")
+        if "path" in trial:
+            _path(trial["path"], f"{label}.sample_trial.path")
+        trial["params"] = _params(trial.get("params", {}), f"{label}.sample_trial.params")
+        sampler["sample_trial"] = trial
+        return sampler
+    _closed(trial, _LEGACY_TRIAL_KEYS, f"{label}.sample_trial")
     dataset = _table(trial.get("dataset"), f"{label}.sample_trial.dataset")
     _closed(dataset, _DATASET_KEYS, f"{label}.sample_trial.dataset")
     if not isinstance(dataset.get("adapter"), str) or not dataset["adapter"]:
@@ -231,7 +259,10 @@ def _validate_sampler(raw: Any, label: str) -> dict[str, Any]:
             raise ValueError(f"{label}.sample_trial.run.adapter must be a non-empty string")
         adapter["params"] = _params(adapter.get("params", {}), f"{label}.sample_trial.run.params")
         trial["run"] = adapter
-    sampler["sample_trial"] = trial
+    if "objective" in sampler and sampler["objective"] != objective:
+        raise ValueError(f"{label}.objective conflicts with legacy {label}.sample_trial.objective")
+    sampler.setdefault("objective", objective)
+    sampler["sample_trial"] = {"implementation": "legacy", "params": {}, "_legacy": trial}
     return sampler
 
 
@@ -373,7 +404,7 @@ def _dimension(name: str, raw: Mapping[str, Any], label: str) -> ParamDimension:
 
 
 @dataclass
-class SampleTrialResult:
+class SampleResult:
     sample: ParamSample
     runs: list[Any]
     metrics: dict[str, float]
@@ -381,10 +412,17 @@ class SampleTrialResult:
     error: str | None = None
     started_at: str | None = None
     finished_at: str | None = None
+    score: float | None = None
+    status: str = "succeeded"
+    artifacts: dict[str, Any] = field(default_factory=dict)
+
+
+# Compatibility name; canonical documentation and custom SampleTrials need not use it.
+SampleTrialResult = SampleResult
 
 
 class ParamSampler:
-    """Deterministic proposal interface; optimizer state remains inside sampler."""
+    """History-driven sampler with no duplicated hidden best-sample state."""
 
     def __init__(self, space: ParamSpace, strategy: str = "grid", *, max_samples: int | None = None, seed: int | None = None, blocks: Sequence[Sequence[str]] | None = None, objective_metric: str = "objective", direction: str = "maximize", _label: str = "sampler") -> None:
         if strategy not in _STRATEGIES: raise ValueError(f"unsupported sampler strategy: {strategy}")
@@ -415,14 +453,14 @@ class ParamSampler:
                     if sample.key() not in {candidate.key() for candidate in candidates}: candidates.append(sample)
         return candidates[:self.max_samples] if self.max_samples is not None else candidates
 
-    def propose(self, history: Sequence[SampleTrialResult]) -> ParamSample | None:
+    def next_sample(self, history: Sequence[SampleTrialResult]) -> ParamSample | None:
         if self.max_samples is not None and len(history) >= self.max_samples:
             return None
         observed = {result.sample.key() for result in history}
         if self.strategy in {"coordinate", "block_coordinate"}:
             if not history:
                 return self.space.start
-            best = PlaybookTrialResult(list(history)).best(self.objective_metric, self.direction)
+            best = self.best_result(history)
             anchor = best.sample if best else self.space.start
             for block in self.blocks:
                 for values in itertools.product(*(d.values for d in block)):
@@ -433,6 +471,24 @@ class ParamSampler:
                         return sample
             return None
         return next((sample for sample in self._candidates if sample.key() not in observed), None)
+
+    def best_result(self, history: Sequence[SampleTrialResult]) -> SampleTrialResult | None:
+        def score(item):
+            return item.score if item.score is not None else item.metrics.get(self.objective_metric)
+        valid = [item for item in history if item.error is None and item.status == "succeeded"
+                 and not isinstance(score(item), bool) and isinstance(score(item), (int, float))
+                 and math.isfinite(score(item))]
+        if not valid:
+            return None
+        return (max if self.direction == "maximize" else min)(valid, key=score)
+
+    def best_sample(self, history: Sequence[SampleTrialResult]) -> ParamSample | None:
+        best = self.best_result(history)
+        return best.sample if best is not None else None
+
+    # Compatibility aliases for the pre-SampleTrial public surface.
+    def propose(self, history: Sequence[SampleTrialResult]) -> ParamSample | None:
+        return self.next_sample(history)
 
     def observe(self, history: Sequence[SampleTrialResult], result: SampleTrialResult) -> None:
         if result.sample.key() in {item.sample.key() for item in history[:-1]}:
@@ -455,7 +511,7 @@ def run_playbook_trial(*, sampler: ParamSampler, dataset: Iterable[Any], run: Ca
     """Execute the required propose -> runs -> evaluate -> observe outer loop."""
     result = PlaybookTrialResult()
     items = list(dataset)
-    while (sample := sampler.propose(result.history)) is not None:
+    while (sample := sampler.next_sample(result.history)) is not None:
         if sample.key() in {trial.sample.key() for trial in result.history}:
             raise ValueError("sampler proposed a duplicate ParamSample")
         started = datetime.now(timezone.utc).isoformat()
@@ -480,11 +536,14 @@ def run_playbook_trial(*, sampler: ParamSampler, dataset: Iterable[Any], run: Ca
         except Exception as failure:
             error = str(failure)
             feedback = None
-        trial = SampleTrialResult(sample, runs, metrics, feedback, error, started, datetime.now(timezone.utc).isoformat())
+        score = metrics.get(metric) if error is None else None
+        trial = SampleTrialResult(sample, runs, metrics, feedback, error, started,
+                                  datetime.now(timezone.utc).isoformat(), score,
+                                  "failed" if error else "succeeded")
         result.history.append(trial); sampler.observe(result.history, trial)
         if on_sample is not None:
             on_sample(trial, result)
     return result
 
 
-__all__ = ["ParamDimension", "ParamSample", "ParamSampler", "ParamSpace", "PlaybookTrialResult", "SampleTrialResult", "run_playbook_trial", "validate_document"]
+__all__ = ["ParamDimension", "ParamSample", "ParamSampler", "ParamSpace", "PlaybookTrialResult", "SampleResult", "SampleTrialResult", "run_playbook_trial", "validate_document"]

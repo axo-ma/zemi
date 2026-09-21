@@ -1,4 +1,4 @@
-# Values are resolved lazily from @inst/_secrets/arsenal.env.
+# Persistent inputs are resolved lazily from @inst/_inputs/values.env.
 [arsenal]
 mode = "router"
 

@@ -64,19 +64,16 @@ strategy = "grid"
 max_samples = 6
 seed = 17
 
-[playbooks.sampler.sample_trial.dataset]
-adapter = "jsonl"
-path = "@comp/data/eval.jsonl"
-
-[playbooks.sampler.sample_trial.evaluator]
-adapter = "@comp/evaluators/summary.py:evaluate"
-
-[playbooks.sampler.sample_trial.evaluator.params]
-language = { ref = "system.params.locale" }
-
-[playbooks.sampler.sample_trial.objective]
-metric = "quality"
+[playbooks.sampler.objective]
+metric = "f1"
 direction = "maximize"
+
+[playbooks.sampler.sample_trial]
+implementation = "table_detection"
+path = "@comp/data/eval.json"
+
+[playbooks.sampler.sample_trial.params]
+language = { ref = "system.params.locale" }
 
 [[playbooks]]
 id = "extract-remote"
@@ -100,16 +97,13 @@ max_samples = 5
 seed = 23
 blocks = [["schema_mode", "temperature"]]
 
-[playbooks.sampler.sample_trial.dataset]
-adapter = "csv"
-path = "@comp/data/extraction.csv"
-
-[playbooks.sampler.sample_trial.dataset.params]
-input_column = "text"
-
-[playbooks.sampler.sample_trial.evaluator]
-adapter = "@comp/evaluators/extraction.py:evaluate"
-
-[playbooks.sampler.sample_trial.objective]
+[playbooks.sampler.objective]
 metric = "f1"
 direction = "maximize"
+
+[playbooks.sampler.sample_trial]
+implementation = "@comp/sample_trials/extraction.py:ExtractionSampleTrial"
+path = "@comp/data/extraction.csv"
+
+[playbooks.sampler.sample_trial.params]
+input_column = "text"

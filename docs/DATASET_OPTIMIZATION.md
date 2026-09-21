@@ -3,10 +3,10 @@
 This document refines the experimental layer defined by
 [ZEMI architecture](ZEMI_ARCHITECTURE.md).
 
-`ZemiComponent.run()` validates every enabled playbook's complete dataset and
-resolves its adapters before creating an Arsenal session. Each sampler proposal
-runs the playbook for every item, then evaluates the completed sample, observes
-the result, and proposes again. Coordinate strategies recompute neighborhoods
+`ZemiComponent.run()` resolves one complete SampleTrial and validates its
+dataset before creating an Arsenal session. Each sampler proposal runs the
+SampleTrial, evaluates its runs, derives the configured score, appends the full
+result to history, and proposes again. Coordinate strategies recompute neighborhoods
 around the best observed sample; ties retain the earlier sample. Search stops
 when that neighborhood has no unseen candidates or the sample limit is reached.
 `block_coordinate` uses explicit named blocks: it explores each block's
@@ -16,53 +16,42 @@ that best sample, and treats every unlisted dimension as a singleton block.
 Dataset optimization runs only when the playbook explicitly sets
 `param_space_mode = "sampler"` and defines `[playbooks.sampler]`. Use
 `param_space_mode = "start_only"` to execute exactly the declared start/fixed
-values once as an ordinary PlaybookRun without loading a dataset or evaluator
+values once as an ordinary PlaybookRun without loading a dataset
 and without creating a SampleTrial. Both modes require a sampler configuration;
 only sampler mode requires `sample_trial`. A variable ParamSpace without an
 explicit mode or sampler is rejected. Fixed-only Playbooks create no ParamSpace.
 
 See [Params 0.3](ZEMI_PARAMS_0.3.md) for the normative structure and resolution.
 
-## Adapter contracts
+## SampleTrial contract
 
-Built-in datasets: `table_detection`, `jsonl`, `csv`. Built-in evaluator:
-`table_detection`. Default run adapter: `notebook`.
-
-A local adapter is `@comp/path.py:function`. Paths must resolve inside the
-component, including symlink resolution. Imports by arbitrary module name,
-absolute paths, external entry points and arbitrary expressions are rejected.
-Local Python adapters are trusted component code, not sandboxed plugins: their
-module-level code executes at resolution. Do not load untrusted implementations.
-
-Callable signatures:
+SampleTrial is the only public extension point. The built-in implementation is
+`table_detection`; a custom implementation is trusted Component code selected
+as `@comp/path.py:ClassOrFactory`. Paths are confined to the Component. Arbitrary
+imports, absolute paths, entry points, and expressions are rejected.
 
 ```python
-def load(*, path, params):
-    return [{"id": "item-id", "input": {...}, "ground_truth": ..., "tags": [...]}]
+sample_trial = SampleTrial(config)
+dataset = sample_trial.load_dataset()
 
-def run(sample, input, *, execute, context, params):
-    # No ground truth or completed run records are passed here.
-    # context.workbook(input["workbook_path"]) caches one open book per sample.
-    return execute({"dataset_input": input})  # executes notebook with sample params
+while sample := sampler.next_sample(history):
+    runs = sample_trial.run(playbook=playbook, sample=sample, dataset=dataset)
+    metrics, feedback = sample_trial.evaluate(runs=runs)
+    score = metrics[sampler.objective.metric]
+    history.append(sample_trial.result(
+        sample=sample, runs=runs, score=score,
+        metrics=metrics, feedback=feedback,
+    ))
 
-def evaluate(completed_sample_trial, *, params):
-    return {"f1": 0.5}, {"diagnostics": ...}
+best_sample = sampler.best_sample(history)
 ```
 
-`execute` returns the notebook's `zemi.playbook.output_params` mapping. The
-default notebook adapter injects only `dataset_input`. A custom run adapter may
-prepare an input representation using `context.workbook` and inject it instead.
-The context closes before evaluation and on failure. `table_detection` items
-are grouped by workbook in source workbook order. No open Excel objects are
-retained in dataset items. The default notebook adapter leaves workbook opening
-to the notebook; to reuse a workbook between sheets use an input preparation
-adapter and `RunContext` as Experiment 5 does. Adapters must not independently
-open additional books while retaining the context's current book.
-
-JSONL/CSV are transport loaders: records still need an `input` field. A local
-loader can convert application-specific records. Dataset and adapter params are
-host-side configuration and are never implicitly inherited by notebook params.
-This is data-flow separation, not an OS filesystem sandbox for trusted notebooks.
+The stable methods are `load_dataset`, `run`, `evaluate`, `result`, and
+`render_report`. Standard `run` invokes the Playbook once for every DatasetItem.
+Workbook caches and other special execution context belong inside the table
+SampleTrial. `evaluate` sees runs and SampleTrial configuration only. It returns
+the complete metrics mapping plus optional JSON feedback; objective selection is
+outside it. Custom code is trusted, not sandboxed.
 
 ## Table dataset v1
 
@@ -116,8 +105,11 @@ the SampleTrial, are recorded, and are excluded from objective comparisons.
 The old `trials`, `playbooks`, and notebook artifact fields remain available.
 `job_trial.playbook_trials[].samples[].runs[]` adds stable hierarchy ids,
 sample ordinals and params, timestamps, predictions, references, errors,
-metrics/feedback, ranking and best sample. `main.md` and `report.md` render the
-same dataset results. Runtime dataset inputs can contain absolute resolved paths;
+scalar score, the full metrics mapping, feedback, ranking and best sample.
+`report.json` remains the generic replay source. ZEMI renders the generic shell
+in `main.md`, `report.md`, and a detailed Playbook SampleTrial report; each
+SampleTrial appends domain Markdown from `render_report`. Results are saved
+before domain rendering after every sample. Runtime dataset inputs can contain absolute resolved paths;
 this does not change the rule for paths in source TOML.
 
 For held-out evaluation, configure the test dataset and instantiate the

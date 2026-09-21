@@ -55,7 +55,7 @@ Managed Arsenal в Router Mode. Один `curated_router` предоставля
 
 | Arsenal TOML | Endpoint | Логическое имя модели | Фактическая модель |
 |---|---|---|---|
-| `llm_external_local.toml` | `host_llm` | `host_model` | ссылка `HOST_LLM_MODEL` в `arsenal.env` |
+| `llm_external_local.toml` | `host_llm` | `host_model` | persistent input `HOST_LLM_MODEL` |
 | `llm_external_providers.toml` | `openrouter` | `openrouter_model` | ссылка `OPENROUTER_MODEL` |
 | `llm_external_providers.toml` | `openrouter_free` | `openrouter_free` | `openrouter/free` |
 | `llm_external_providers.toml` | `openai` | `openai_model` | ссылка `OPENAI_MODEL` |
@@ -69,7 +69,7 @@ Managed Arsenal в Router Mode. Один `curated_router` предоставля
 
 Ссылки разрешаются лениво: при создании сессии значения не запрашиваются.
 Первый доступ к выбранной модели читает либо дополняет
-`@inst/_secrets/arsenal.env`.
+`@inst/_inputs/values.env` (with migration from the legacy Arsenal store).
 
 ## Доступ из Python
 

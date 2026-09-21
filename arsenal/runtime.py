@@ -17,7 +17,7 @@ from .. import env, toml
 from .downloads import DownloadError, download_llama, download_model
 from .config import normalize_endpoints, redacted_endpoint
 from .objects import Endpoint, Llama, Model, NamedObjects
-from .secrets import SecretStore
+from ..inputs import InputStore
 
 
 __all__ = ["ArsenalSession"]
@@ -70,7 +70,7 @@ class ArsenalSession:
         if not isinstance(configs, list):
             raise ValueError("arsenal.llamas must be an array of tables")
         endpoint_configs = normalize_endpoints(arsenal_config)
-        self._secret_store = SecretStore(_secret_store_path)
+        self._secret_store = InputStore(_secret_store_path)
         self._endpoint_configs = {item["name"]: item for item in endpoint_configs}
         self._resolved_endpoints: dict[str, Endpoint] = {}
 

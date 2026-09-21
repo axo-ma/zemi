@@ -104,19 +104,16 @@ strategy = "grid"
 max_samples = 6
 seed = 17
 
-[playbooks.sampler.sample_trial.dataset]
-adapter = "jsonl"
-path = "@comp/data/eval.jsonl"
-
-[playbooks.sampler.sample_trial.evaluator]
-adapter = "@comp/evaluators/summary.py:evaluate"
-
-[playbooks.sampler.sample_trial.evaluator.params]
-language = { ref = "system.params.locale" }
-
-[playbooks.sampler.sample_trial.objective]
-metric = "quality"
+[playbooks.sampler.objective]
+metric = "f1"
 direction = "maximize"
+
+[playbooks.sampler.sample_trial]
+implementation = "table_detection"
+path = "@comp/data/eval.json"
+
+[playbooks.sampler.sample_trial.params]
+language = { ref = "system.params.locale" }
 
 [[playbooks]]
 id = "extract-remote"
@@ -140,19 +137,16 @@ max_samples = 5
 seed = 23
 blocks = [["schema_mode", "temperature"]]
 
-[playbooks.sampler.sample_trial.dataset]
-adapter = "csv"
-path = "@comp/data/extraction.csv"
-
-[playbooks.sampler.sample_trial.dataset.params]
-input_column = "text"
-
-[playbooks.sampler.sample_trial.evaluator]
-adapter = "@comp/evaluators/extraction.py:evaluate"
-
-[playbooks.sampler.sample_trial.objective]
+[playbooks.sampler.objective]
 metric = "f1"
 direction = "maximize"
+
+[playbooks.sampler.sample_trial]
+implementation = "@comp/sample_trials/extraction.py:ExtractionSampleTrial"
+path = "@comp/data/extraction.csv"
+
+[playbooks.sampler.sample_trial.params]
+input_column = "text"
 ```
 
 `arsenals.local.params.device` is a logical named lookup. Arrays remain the TOML
@@ -209,7 +203,7 @@ namespaces. Duplicate ids are therefore forbidden.
 `param_space_mode = "start_only"` validates the sampler policy but performs no
 sampling. It executes one ordinary PlaybookRun with the `start` value of every
 variable dimension plus every fixed parameter; it creates no SampleTrial and
-loads no dataset or evaluator. `param_space_mode = "sampler"` passes the complete
+loads no dataset. `param_space_mode = "sampler"` passes the complete
 ParamSpace to the configured sampler and executes its SampleTrial lifecycle.
 
 When all resolved playbook parameters are fixed, ZEMI creates no ParamSpace and
@@ -230,30 +224,26 @@ omitting either its mode or sampler is an error.
   resolved ParamSpace, MUST NOT name fixed parameters, and MUST NOT occur in
   more than one block. Unlisted variable dimensions become singleton blocks in
   declaration order.
-- `sample_trial` (required only in `sampler` mode): dataset, evaluator, and
-  objective contract. It MAY be omitted in `start_only` mode.
+- `objective` (required in `sampler` mode): `metric` selects one key from the
+  complete SampleTrial metrics mapping; `direction` is `maximize` or `minimize`.
+- `sample_trial` (required only in `sampler` mode): one complete built-in or
+  custom SampleTrial implementation. It MAY be omitted in `start_only` mode.
 
-An implementation MAY expose strategy-specific adapters, including one backed
-by DSPy, but they obey the same `propose(history)` / `observe(...)` contract.
+An implementation MAY use another optimization framework internally, but the
+public sampler contract remains `next_sample(history)` / `best_sample(history)`.
 
 ### 3.6 `sample_trial`
 
-- `dataset` (required table): `adapter` identifies the dataset loader; `path` is
-  an optional `@comp/...` or `@inst/...` source; `params` contains only adapter
-  user values.
-- `evaluator` (required table): `adapter` identifies a callable or registered
-  evaluator; `params` contains only evaluator user values. The evaluator accepts
-  the completed SampleTrial (all PlaybookRuns and their outputs) and returns a
-  finite numeric metric map plus optional JSON-compatible feedback.
-- `objective` (required table): `metric` is the exact evaluator metric key and
-  `direction` is exactly `maximize` or `minimize`.
-- `run` (optional table): `adapter` identifies a registered or local run
-  callable; `params` contains only adapter user values. It defaults to the
-  `notebook` adapter. The run adapter receives the sample and item input only,
-  never ground truth. See [dataset adapter contracts](DATASET_OPTIMIZATION.md).
+- `implementation` (required string): built-in `table_detection` or confined
+  trusted Component code `@comp/path.py:ClassOrFactory`.
+- `path` (optional ZEMI path): domain data source interpreted by the selected
+  implementation.
+- `params` (optional table): implementation-owned JSON-compatible configuration.
 
-Dataset and evaluator adapters are deliberately small interfaces; Params 0.3
-does not prescribe a machine-learning framework.
+The stable SampleTrial methods are `load_dataset`, `run`, `evaluate`, `result`,
+and `render_report`. Standard `run` executes the Playbook once per DatasetItem;
+special workbook/context behavior belongs inside the table implementation.
+There is no canonical dataset, run, or evaluator adapter block.
 
 ## 4. Parameter values and ParamSpace
 
@@ -326,8 +316,7 @@ Resolution is deterministic:
 3. Resolve `system.params`.
 4. Resolve `component.params`.
 5. Resolve each `arsenals[].params` in document order.
-6. Resolve each `playbooks[].params`, dataset params, evaluator params, and run params in
-   document order.
+6. Resolve each `playbooks[].params` and `sample_trial.params` in document order.
 7. Within one table, apply `__include__` entries left-to-right; later includes
    replace earlier keys, then local keys replace all included keys.
 8. Resolve `select` and `input` once, including `param_space_mode`, then validate
@@ -361,18 +350,18 @@ the PlaybookTrial; they do not synthesize SampleTrial or dataset-item records.
 For each `sampler` PlaybookTrial the conceptual outer loop is:
 
 ```text
-sample = sampler.propose(history)
-run playbook once for every dataset item using sample
-result = evaluator.evaluate(completed_sample_trial)
-sampler.observe(history, result)
+sample = sampler.next_sample(history)
+runs = sample_trial.run(playbook, sample, dataset)
+metrics, feedback = sample_trial.evaluate(runs)
+score = metrics[sampler.objective.metric]
+history.append(sample_trial.result(sample, runs, score, metrics, feedback))
 ```
 
-The evaluator runs only after every required PlaybookRun for that SampleTrial
-has been collected. Group metrics that need multiple runs are computed at that
-point. A sampler cannot claim the objective has been reached before evaluator
-metrics exist. `observe` receives the ParamSample, run records, metrics,
-feedback, and failure state; `history` is the ordered sequence of observed
-SampleTrial results.
+SampleTrial evaluation runs only after every required PlaybookRun has been
+collected. `evaluate` receives runs and its own configuration, not ParamSample
+or an artificial completed-trial wrapper. History stores sample, runs, scalar
+score, the full metrics mapping, optional feedback, status, timestamps, errors,
+and artifacts. Execution status and evaluation diagnostics remain distinct.
 
 Strategy minimum semantics:
 
@@ -388,11 +377,11 @@ Strategy minimum semantics:
   remains fixed at its current-best value. Unlisted dimensions are visited as
   singleton blocks after the explicit blocks, in declaration order.
 
-The sampler owns any optimizer state. A trial stops when the finite grid is
+History is the source of truth; the sampler does not duplicate best-sample
+state. A trial stops when the finite grid is
 exhausted, `max_samples` is reached, or the sampler reports exhaustion. Objective
-comparison uses only the configured metric and direction. Missing, boolean,
-NaN, or infinite objective metrics fail the SampleTrial and are not valid
-objective observations.
+comparison uses only the derived scalar score and objective direction. Missing,
+boolean, NaN, or infinite selected metrics fail the SampleTrial.
 
 ## 7. Validation and reporting
 
@@ -405,20 +394,21 @@ id. Besides the field rules above, ZEMI MUST reject:
 - duplicate Arsenal or playbook ids;
 - unknown Arsenal references;
 - absolute filesystem paths in configuration;
-- unsupported strategy, direction, adapter shape, or parameter wrapper;
+- unsupported strategy, direction, SampleTrial implementation, or parameter wrapper;
 - malformed sampler blocks, unknown or fixed block members, or a dimension
   repeated across blocks;
 - a variable ParamSpace without `param_space_mode` or without `sampler`;
-- sampler mode without `sample_trial`, or without its complete dataset,
-  evaluator, and objective contract;
+- sampler mode without `sample_trial` or sampler `objective`;
+- invalid built-in or non-confined custom SampleTrial implementation;
 - a fixed-only Playbook with `param_space_mode` or `sampler`;
 - duplicate ParamSamples proposed by a sampler;
-- evaluator results without the objective metric.
+- SampleTrial metrics without the objective metric.
 
-Reports MUST preserve the hierarchy and stable ids. Every SampleTrial records
-its ParamSample, proposal ordinal, PlaybookRuns, evaluator metrics and feedback,
-objective value, status, timestamps, and errors. Existing notebook artifacts
-remain attached to the corresponding PlaybookRun.
+`report.json` is the stable generic machine-readable report and replay source.
+Every SampleTrial records sample, runs, score, the complete metrics mapping,
+feedback, status, timestamps, errors, and artifacts. ZEMI owns the generic
+Markdown shell; SampleTrial owns domain Markdown through `render_report`, called
+after every completed sample so later failures do not discard prior results.
 
 ## 8. Migration from the current implementation
 
@@ -445,8 +435,10 @@ Canonical mappings are:
 Migration tools and manual migrations MUST also choose an explicit
 `param_space_mode` whenever the migrated playbook contains `values` or `range`.
 Use `"start_only"` together with a sampler policy to preserve a deliberate
-single-start troubleshooting run, or `"sampler"` with a full `sample_trial`
-contract for search. Earlier behavior
+single-start troubleshooting run, or `"sampler"` with sampler `objective` and a
+full `sample_trial` contract for search. Legacy dataset/run/evaluator blocks are
+accepted only through an explicit compatibility normalization; canonical files
+MUST select one SampleTrial implementation. Earlier behavior
 where a variable ParamSpace without a sampler silently ran only its start sample
 is intentionally rejected because it hid configuration mistakes.
 

@@ -29,18 +29,23 @@ evaluators, or an AI framework.
 ## 2. Experimental AI-enablement layer
 
 AI experimentation is an explicit layer on top of the universal core. Its
-concepts are **ParamSpace**, **Arsenal**, **sampler**, **evaluator**,
+concepts are **ParamSpace**, optional **Arsenal**, **sampler**, **SampleTrial**,
 **objective**, the trial hierarchy, and experiment reports. These concepts MUST
 NOT redefine Instance, System, Component, or Playbook ownership.
 
 - ParamSpace declares variable dimensions for a Playbook and exists only when
   at least one `values` or `range` dimension is present.
 - Arsenal optionally supplies named model endpoints and client integrations.
-- A sampler proposes ParamSamples from a ParamSpace.
-- An evaluator measures a completed SampleTrial and MAY return diagnostic
-  feedback.
-- An objective selects exactly one evaluator metric and a comparison direction
-  for sampler decisions.
+- A sampler exposes `next_sample(history)` and `best_sample(history)` and keeps
+  history as the source of truth.
+- SampleTrial is the single public experiment extension point. It owns dataset
+  loading, per-item Playbook execution policy, evaluation, result construction,
+  and domain-specific Markdown rendering.
+- `SampleTrial.evaluate(runs)` returns the complete numeric metrics mapping and
+  optional feedback. It receives neither ParamSample nor an artificial completed
+  trial wrapper.
+- A sampler objective selects one metric and direction. ZEMI derives
+  `score = metrics[objective.metric]`; SampleTrial does not receive the objective.
 - Trials and reports preserve the executed data flow and outcomes.
 
 DSPy or another optimization framework MAY implement an adapter or sampler, but
@@ -102,11 +107,11 @@ The complete sampler-mode experiment hierarchy is:
 Fixed-only and `start_only` runs have no SampleTrial. Evaluator results are a
 finite numeric metric map plus optional JSON-compatible feedback.
 
-An evaluator runs only after all required PlaybookRuns in a SampleTrial are
-collected. It returns finite numeric metrics and MAY return JSON-compatible
-feedback. Feedback explains or diagnoses a result; it does not choose the best
-sample. The objective names one metric and `maximize` or `minimize`; only that
-metric determines sampler comparison and ranking.
+SampleTrial evaluates only after all required PlaybookRuns are collected. Its
+result stores sample, runs, scalar score, the full metrics mapping, optional
+feedback, statuses, timestamps, failures, and artifacts. Execution failures and
+evaluation diagnostics are separate statuses. The objective names one metric
+and `maximize` or `minimize`; only the derived score determines ranking.
 
 Reports MUST preserve stable ids, resolved sample parameters, runs, metrics,
 feedback, objective values, statuses, timestamps, failures, ranking, and the
@@ -114,20 +119,16 @@ selected sampler configuration. Notebook artifacts remain attached to their
 PlaybookRuns. Detailed lifecycle and report behavior is defined by
 [Dataset optimization](DATASET_OPTIMIZATION.md).
 
-## 6. Adapter boundary
+## 6. SampleTrial extension boundary
 
-The AI-enablement layer has three execution adapter roles:
-
-- dataset adapters load normalized items;
-- run adapters execute a Playbook for one item and ParamSample;
-- evaluator adapters score the completed SampleTrial.
-
-Built-in adapter names refer to implementations shipped and validated by ZEMI.
-A local adapter uses the explicit `@comp/path.py:function` form, MUST resolve
-inside the Component, and is trusted Component code rather than sandboxed code.
-Arbitrary module imports, absolute paths, external entry points, and expression
-evaluation are not adapter discovery mechanisms. Adapter signatures, built-ins,
-and data-separation rules are specified in
+The public extension is one complete SampleTrial implementation, not separate
+dataset/run/evaluator adapters. Canonical configuration selects a built-in such
+as `table_detection` or trusted Component code through the confined explicit
+form `@comp/path.py:ClassOrFactory`. A custom implementation MUST provide
+`load_dataset`, `run`, `evaluate`, `result`, and `render_report`. Internal helpers
+may exist inside a built-in or migration bridge, but are not canonical public
+configuration. Arbitrary module imports, absolute paths, external entry points,
+and expression evaluation are forbidden. See
 [Dataset optimization](DATASET_OPTIMIZATION.md).
 
 ## 7. Arsenal lifecycle and secrets
@@ -144,16 +145,16 @@ Arsenal is owned for a job, managed per playbook, or treated as external:
 
 Within an Arsenal session, managed endpoints may own only processes started by
 that session; external endpoints are validated but never lifecycle-owned.
+Endpoint ownership and protocol details are specified in
+[Arsenal endpoints](../ARSENAL_ENDPOINTS.md).
 
-Interactive Params `{ input = ... }` values are one-run inputs and are not
-persisted. Arsenal `env` references are persistent values: `env` names a key in
-the dedicated Instance store at `@inst/_secrets/arsenal.env`, never a process
-environment variable. `secret = true` only hides entry; persistence is the same
-for visible and hidden values. Validation is optional and independent.
-Persistent secrets MUST NOT be embedded in Params, reports, templates, or Git,
-and the store is not copied into `os.environ`. Endpoint configuration, managed/external
-ownership, redaction, and secret persistence are specified in
-[Arsenal endpoints and `arsenal.env`](../ARSENAL_ENDPOINTS.md).
+Inputs are universal and independent of Arsenal. In an input specification,
+`env` enables persistence/reuse under the neutral Instance store
+`@inst/_inputs/values.env`; it never means `os.environ`. Without `env`, input is
+ephemeral. `validate` only checks a value and never enables persistence.
+`secret = true` only hides entry and masks reports. The four combinations of
+ephemeral/persistent and visible/secret are valid. Legacy values in
+`@inst/_secrets/arsenal.env` migrate on first reuse. See [Inputs](INPUTS.md).
 
 ## 8. Contract maintenance
 
@@ -161,7 +162,6 @@ This file MUST be updated in the same change whenever an architectural contract
 above changes. Detailed documents SHOULD link back here and remain the single
 source of truth for their lower-level schemas rather than duplicating this
 overview. Changes to Params resolution belong in
-[ZEMI Params 0.3](ZEMI_PARAMS_0.3.md); dataset, adapter, evaluator, and reporting
+[ZEMI Params 0.3](ZEMI_PARAMS_0.3.md); SampleTrial and reporting
 details belong in [Dataset optimization](DATASET_OPTIMIZATION.md); endpoint and
-secret behavior belongs in
-[Arsenal endpoints and `arsenal.env`](../ARSENAL_ENDPOINTS.md).
+input behavior belongs in [Inputs](INPUTS.md).

@@ -1,4 +1,4 @@
-# Arsenal endpoints and `arsenal.env`
+# Arsenal endpoints
 
 This document refines the Arsenal boundary defined by
 [ZEMI architecture](docs/ZEMI_ARCHITECTURE.md).
@@ -8,15 +8,15 @@ stable ZEMI name, while `model` is the real provider model ID. Legacy
 `[[arsenal.llamas]]`, Model Mode and Router Mode remain supported and normalize
 to managed llama.cpp endpoints.
 
-## Persistent values
+## Inputs
 
-Arsenal reads user-entered values only from:
+Endpoint input references use the generic ZEMI persistent input store:
 
 ```text
-@inst/_secrets/arsenal.env
+@inst/_inputs/values.env
 ```
 
-Here `env` is the key in this persistent store, not a process-environment
+Here `env` enables persistence and names a key in this store, not a process-environment
 variable. If the value exists (and, when configured, validates), use it. If not,
 ask with `input()` or, for `secret = true`, `getpass.getpass()`, optionally
 validate, save, and use it. Visible and hidden entries have identical persistence;
@@ -33,7 +33,7 @@ model = { env = "HOST_LLM_MODEL", prompt = "Введите model ID внешне
 `non_empty`, `url`, and `port`. Pressing Enter accepts `suggested`. Invalid values are requested again; EOF or
 cancel produces a finite, explicit error. To rotate a value or force the next
 session to ask again, safely remove only its `NAME=value` line from
-`arsenal.env`. Existing clients retain the value already read; a new session or
+`values.env`. Existing clients retain the value already read; a new session or
 client reads the file again.
 
 The UTF-8 dotenv parser does not execute shell code. It validates names, rejects
@@ -43,8 +43,10 @@ Windows ACL restriction is best effort and emits a warning if it cannot be
 applied. Never add this file to a component, template, Git, run artifact, or
 report.
 
-This mechanism is distinct from Params `{ input = ... }`: Params input is a
-typed value resolved for the current job and is never written to `arsenal.env`.
+The same mechanism is available to Params `{ input = ... }`. Omitting `env`
+makes an input ephemeral; `validate` does not enable persistence and
+`secret = true` controls hidden entry and masking only. See [ZEMI inputs](docs/INPUTS.md).
+Legacy values in `@inst/_secrets/arsenal.env` migrate on first reuse.
 
 ## Managed and external lifecycle
 

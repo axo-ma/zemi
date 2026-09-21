@@ -139,33 +139,37 @@ def table_evaluator(trial, *, params):
     for run in trial.runs:
         item = run["item"]
         truth = Counter(item["ground_truth"])
-        error = run.get("error")
+        execution_error = run.get("error")
+        diagnostic = None
         prediction = run.get("prediction")
         try:
-            if error:
-                raise ValueError(str(error))
+            if execution_error:
+                raise ValueError(str(execution_error))
             if not isinstance(prediction, dict) or not isinstance(prediction.get("ranges"), list):
                 raise ValueError("Prediction must be an object with ranges array")
             found = Counter(exact_range(value) for value in prediction["ranges"])
         except (TypeError, ValueError) as failure:
-            error = str(failure)
+            diagnostic = str(failure)
             found = Counter()
-            run["evaluation_error"] = error
-            run["status"] = "failed"
+            run["evaluation_error"] = diagnostic
+            run["evaluation_status"] = "penalized"
+        else:
+            run["evaluation_status"] = "evaluated"
         tp = sum((truth & found).values())
         # A failed response is a false detection as well as missing all GT.
         # This penalizes failures on reviewed negative worksheets too.
-        fp, fn = sum(found.values()) - tp + int(bool(error)), sum(truth.values()) - tp
-        errors += bool(error)
+        fp, fn = sum(found.values()) - tp + int(bool(diagnostic)), sum(truth.values()) - tp
+        errors += bool(diagnostic)
         empty += not bool(truth)
-        empty_correct += not truth and not found and not error
+        empty_correct += not truth and not found and not diagnostic
         for i, value in enumerate((tp, fp, fn)):
             total[i] += value
             for tag in set(item.get("tags", [])):
                 tags[tag][i] += value
         details.append({"item_id": item["id"], "input": item["input"], "tags": item.get("tags", []),
                         "ground_truth": item["ground_truth"], "prediction": prediction,
-                        "error": error, **_scores(tp, fp, fn)})
+                        "error": diagnostic, "execution_status": run.get("status"),
+                        "evaluation_status": run.get("evaluation_status"), **_scores(tp, fp, fn)})
     return {**_scores(*total), "items": len(details), "errors": errors,
             "reviewed_empty": empty, "correct_empty": empty_correct}, {
                 "items": details, "tags": {tag: _scores(*values) for tag, values in tags.items()}}
