@@ -36,6 +36,15 @@ lifecycle = "external"
 [arsenals.params]
 device = "remote"
 
+# A fixed Playbook needs neither Arsenal, ParamSpace, mode, nor sampler.
+[[playbooks]]
+id = "prepare"
+path = "prepare.ipynb"
+
+[playbooks.params]
+locale = { ref = "system.params.locale" }
+dry_run = true
+
 [[playbooks]]
 id = "summarize-local"
 path = "playbook.ipynb"

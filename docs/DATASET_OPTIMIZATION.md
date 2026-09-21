@@ -16,8 +16,10 @@ that best sample, and treats every unlisted dimension as a singleton block.
 Dataset optimization runs only when the playbook explicitly sets
 `param_space_mode = "sampler"` and defines `[playbooks.sampler]`. Use
 `param_space_mode = "start_only"` to execute exactly the declared start/fixed
-sample without loading a dataset or evaluator. A variable ParamSpace without an
-explicit mode is rejected instead of silently becoming a one-sample run.
+values once as an ordinary PlaybookRun without loading a dataset or evaluator
+and without creating a SampleTrial. Both modes require a sampler configuration;
+only sampler mode requires `sample_trial`. A variable ParamSpace without an
+explicit mode or sampler is rejected. Fixed-only Playbooks create no ParamSpace.
 
 See [Params 0.3](ZEMI_PARAMS_0.3.md) for the normative structure and resolution.
 

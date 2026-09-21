@@ -33,8 +33,9 @@ concepts are **ParamSpace**, **Arsenal**, **sampler**, **evaluator**,
 **objective**, the trial hierarchy, and experiment reports. These concepts MUST
 NOT redefine Instance, System, Component, or Playbook ownership.
 
-- ParamSpace declares fixed values and variable dimensions for a Playbook.
-- Arsenal supplies named model endpoints and client integrations.
+- ParamSpace declares variable dimensions for a Playbook and exists only when
+  at least one `values` or `range` dimension is present.
+- Arsenal optionally supplies named model endpoints and client integrations.
 - A sampler proposes ParamSamples from a ParamSpace.
 - An evaluator measures a completed SampleTrial and MAY return diagnostic
   feedback.
@@ -77,19 +78,19 @@ reference, wrapper, and resolution rules are defined by
 Every Playbook with variable dimensions MUST explicitly choose a
 `param_space_mode`:
 
-- `start_only` executes exactly one ParamSample composed of all fixed values and
-  every dimension's declared `start`. It supports ordinary runs,
-  troubleshooting, and smoke tests and MUST NOT configure a sampler.
+- `start_only` requires and validates a sampler configuration, but does not
+  sample. It executes the fixed and declared `start` values once as an ordinary
+  PlaybookRun, without a SampleTrial, dataset, or evaluator.
 - `sampler` passes the complete ParamSpace to `[playbooks.sampler]` and executes
   the sampling/optimization lifecycle. It MUST configure a sampler.
 
-A fixed-only Playbook without a sampler MAY omit the mode and behaves as
-`start_only`. A variable ParamSpace MUST NOT silently fall back to its start
-sample.
+A fixed-only Playbook has no ParamSpace and MUST omit both mode and sampler. It
+executes once as an ordinary PlaybookRun. A variable ParamSpace MUST NOT
+silently fall back to its start sample.
 
 ## 5. Trial and evaluation model
 
-The experiment hierarchy is:
+The complete sampler-mode experiment hierarchy is:
 
 `JobTrial → PlaybookTrial → SampleTrial → PlaybookRun`
 
@@ -97,6 +98,9 @@ The experiment hierarchy is:
 - PlaybookTrial records one enabled Playbook traversing its ParamSpace.
 - SampleTrial records one ParamSample evaluated against the complete dataset.
 - PlaybookRun records one Playbook execution for one dataset item.
+
+Fixed-only and `start_only` runs have no SampleTrial. Evaluator results are a
+finite numeric metric map plus optional JSON-compatible feedback.
 
 An evaluator runs only after all required PlaybookRuns in a SampleTrial are
 collected. It returns finite numeric metrics and MAY return JSON-compatible
@@ -128,9 +132,10 @@ and data-separation rules are specified in
 
 ## 7. Arsenal lifecycle and secrets
 
-An Arsenal is the model-access boundary. A playbook references one Arsenal by
-stable id. Component configuration controls whether that Arsenal is owned for a
-job, managed per playbook, or treated as external:
+An Arsenal is an optional model-access boundary. A playbook may reference one
+Arsenal by stable id; without that reference it uses no Arsenal lifecycle or
+injected services. Component configuration controls whether a referenced
+Arsenal is owned for a job, managed per playbook, or treated as external:
 
 - `job` starts one owned session before its enabled playbooks and stops it after
   the group;
@@ -140,10 +145,13 @@ job, managed per playbook, or treated as external:
 Within an Arsenal session, managed endpoints may own only processes started by
 that session; external endpoints are validated but never lifecycle-owned.
 
-Secrets are not Params and MUST NOT be embedded in System, Component, Arsenal,
-or Playbook Params, reports, templates, or Git. Secret references resolve
-through the dedicated Instance store at `@inst/_secrets/arsenal.env`; the store
-is not copied into `os.environ`. Endpoint configuration, managed/external
+Interactive Params `{ input = ... }` values are one-run inputs and are not
+persisted. Arsenal `env` references are persistent values: `env` names a key in
+the dedicated Instance store at `@inst/_secrets/arsenal.env`, never a process
+environment variable. `secret = true` only hides entry; persistence is the same
+for visible and hidden values. Validation is optional and independent.
+Persistent secrets MUST NOT be embedded in Params, reports, templates, or Git,
+and the store is not copied into `os.environ`. Endpoint configuration, managed/external
 ownership, redaction, and secret persistence are specified in
 [Arsenal endpoints and `arsenal.env`](../ARSENAL_ENDPOINTS.md).
 

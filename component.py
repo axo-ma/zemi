@@ -19,7 +19,7 @@ from typing import Any, Mapping
 
 from . import env
 from .playbook import PLAYBOOK_OUTPUT_MIME, _output_context, validate_output_params
-from .params import ParamSampler, ParamSpace, SampleTrialResult, run_playbook_trial, validate_document
+from .params import ParamSample, ParamSampler, ParamSpace, SampleTrialResult, run_playbook_trial, validate_document
 
 
 def _canonical_runtime(document: Mapping[str, Any]) -> dict[str, Any]:
@@ -65,7 +65,7 @@ def _canonical_runtime(document: Mapping[str, Any]) -> dict[str, Any]:
         arsenal["params"] = resolved_params(arsenal["params"], label, arsenal["id"])
         reference_document["arsenals"][arsenal["id"]]["params"] = arsenal["params"]
 
-    groups: dict[str, dict[str, Any]] = {}
+    groups: dict[str | None, dict[str, Any]] = {}
     for arsenal in canonical["arsenals"]:
         groups[arsenal["id"]] = {
             "name": arsenal["id"],
@@ -77,7 +77,8 @@ def _canonical_runtime(document: Mapping[str, Any]) -> dict[str, Any]:
         label = f"playbooks.{playbook['id']}.params"
         playbook_params = resolved_params(playbook["params"], label, playbook["id"])
         reference_document["playbooks"][playbook["id"]]["params"] = playbook_params
-        space = ParamSpace.from_params(playbook_params, label)
+        candidate_space = ParamSpace.from_params(playbook_params, label)
+        space = candidate_space if candidate_space.dimensions else None
         mode = playbook.get("param_space_mode")
         if isinstance(mode, Mapping):
             resolved_mode = resolved_params(
@@ -86,26 +87,32 @@ def _canonical_runtime(document: Mapping[str, Any]) -> dict[str, Any]:
                 playbook["id"],
             )
             mode = resolved_mode["param_space_mode"]
-        if mode is None:
-            if space.dimensions:
-                names = ", ".join(dimension.name for dimension in space.dimensions)
-                raise ValueError(
-                    f"playbooks.{playbook['id']}.param_space_mode is required because "
-                    f"playbooks.{playbook['id']}.params defines variable dimensions: {names}"
-                )
-            mode = "start_only"
         sampler_config = playbook.get("sampler")
-        if mode == "sampler" and sampler_config is None:
-            raise ValueError(
-                f'playbooks.{playbook["id"]}.param_space_mode = "sampler" requires '
-                f"playbooks.{playbook['id']}.sampler"
-            )
-        if mode == "start_only" and sampler_config is not None:
-            raise ValueError(
-                f"playbooks.{playbook['id']}.sampler is not allowed when "
-                f'playbooks.{playbook["id"]}.param_space_mode = "start_only"'
-            )
-        if sampler_config:
+        if space is None:
+            if sampler_config is not None:
+                raise ValueError(f"playbooks.{playbook['id']}.sampler is not allowed because its params are all fixed")
+            if mode is not None:
+                raise ValueError(f"playbooks.{playbook['id']}.param_space_mode is not allowed because its params are all fixed")
+            samples = [copy.deepcopy(playbook_params)]
+        else:
+            names = ", ".join(dimension.name for dimension in space.dimensions)
+            if sampler_config is None:
+                raise ValueError(
+                    f"playbooks.{playbook['id']}.sampler is required because its params "
+                    f"define variable dimensions: {names}"
+                )
+            if mode is None:
+                raise ValueError(
+                    f"playbooks.{playbook['id']}.param_space_mode is required because its params "
+                    f"define variable dimensions: {names}"
+                )
+            if mode == "sampler" and "sample_trial" not in sampler_config:
+                raise ValueError(
+                    f'playbooks.{playbook["id"]}.sampler.sample_trial is required when '
+                    f'param_space_mode = "sampler"'
+                )
+            samples = [space.start]
+        if sampler_config and "sample_trial" in sampler_config:
             trial_config = sampler_config["sample_trial"]
             trial_config["dataset"]["params"] = resolved_params(
                 trial_config["dataset"]["params"],
@@ -121,30 +128,44 @@ def _canonical_runtime(document: Mapping[str, Any]) -> dict[str, Any]:
                 trial_config["run"]["params"] = resolved_params(
                     trial_config["run"]["params"],
                     f"playbooks.{playbook['id']}.sampler.sample_trial.run.params", playbook["id"])
-            objective = sampler_config["sample_trial"]["objective"]
+        if sampler_config:
+            objective = sampler_config.get("sample_trial", {}).get("objective", {})
             sampler = ParamSampler(
                 space,
                 sampler_config["strategy"],
                 max_samples=sampler_config.get("max_samples"),
                 seed=sampler_config.get("seed"),
                 blocks=sampler_config.get("blocks"),
-                objective_metric=objective["metric"],
-                direction=objective["direction"],
+                objective_metric=objective.get("metric", "objective"),
+                direction=objective.get("direction", "maximize"),
                 _label=f"playbooks.{playbook['id']}.sampler",
             )
-            samples = [space.start]
-        else:
-            samples = [space.start]
-        groups[playbook["arsenal"]]["playbooks_params"].append({
+        arsenal_id = playbook.get("arsenal")
+        if arsenal_id is None:
+            groups.setdefault(None, {
+                "name": None,
+                "arsenal_config_path": None,
+                "arsenal_start_and_stop_at_job_level": False,
+                "playbooks_params": [],
+                "_v03_no_arsenal": True,
+            })
+        groups[arsenal_id]["playbooks_params"].append({
             "playbook_name": playbook["path"].removeprefix("@comp/"),
             "playbook_id": playbook["id"],
             "enabled": playbook.get("enabled", True),
             "playbook_params": playbook_params,
-            "_v03_samples": [copy.deepcopy(dict(sample.values)) for sample in samples],
+            "_v03_samples": [
+                copy.deepcopy(dict(sample.values) if isinstance(sample, ParamSample) else sample)
+                for sample in samples
+            ],
             "_v03_sampler": copy.deepcopy(sampler_config),
             "_v03_param_space_mode": mode,
-            "_v03_space": copy.deepcopy(playbook_params),
-            "_v03_lifecycle": reference_document["arsenals"][playbook["arsenal"]]["lifecycle"],
+            "_v03_space": copy.deepcopy(playbook_params) if space is not None else None,
+            "_v03_arsenal": arsenal_id,
+            "_v03_lifecycle": (
+                reference_document["arsenals"][arsenal_id]["lifecycle"]
+                if arsenal_id is not None else None
+            ),
         })
     component = canonical["component"]
     return {
@@ -533,7 +554,7 @@ class ComponentReport:
         self.data: dict[str, Any] = {"schema_version": 1, "component_name": component_name, "component_root": str(component_root), "params_file": params_file, "pipeline_params": copy.deepcopy(dict(pipeline_params)), "started_at": _timestamp(), "finished_at": None, "status": "running", "trials": trials, "playbooks": trials, "summary": {}}
 
     def start_trial(self, playbook: "Playbook") -> dict[str, Any]:
-        entry = {"trial_id": playbook.trial_id, "playbook_name": playbook.playbook_name, "param_space_mode": playbook.param_space_mode, "input_params": copy.deepcopy(playbook.params), "resolved_params": copy.deepcopy(playbook.resolved_params), "output_params": {}, "output_notebook": playbook.output_relative.as_posix(), "output_html": playbook.output_html_relative.as_posix(), "output_markdown": playbook.output_markdown_relative.as_posix(), "output_path": playbook.output_relative.as_posix(), "started_at": _timestamp(), "finished_at": None, "duration_seconds": None, "status": "running", "error": None}
+        entry = {"trial_id": playbook.trial_id, "playbook_name": playbook.playbook_name, "arsenal": playbook.arsenal_id, "param_space_mode": playbook.param_space_mode, "input_params": copy.deepcopy(playbook.params), "resolved_params": copy.deepcopy(playbook.resolved_params), "output_params": {}, "output_notebook": playbook.output_relative.as_posix(), "output_html": playbook.output_html_relative.as_posix(), "output_markdown": playbook.output_markdown_relative.as_posix(), "output_path": playbook.output_relative.as_posix(), "started_at": _timestamp(), "finished_at": None, "duration_seconds": None, "status": "running", "error": None}
         self.data["trials"].append(entry)
         self.save()
         return entry
@@ -588,6 +609,7 @@ class Playbook:
         if not isinstance(self.enabled, bool):
             raise ValueError(f"enabled must be boolean for {self.playbook_name!r}")
         self.param_space_mode = config.get("_v03_param_space_mode")
+        self.arsenal_id = config.get("_v03_arsenal")
         configured = config.get("playbook_params", {}) if params is None else params
         if not isinstance(configured, Mapping):
             raise ValueError(f"playbook_params must be a table for {self.playbook_name!r}")
@@ -764,6 +786,8 @@ class ZemiComponent:
                     if identifier not in remaining:
                         continue
                     values = validate_output_params(sample_overrides[identifier])
+                    if config["_v03_space"] is None:
+                        raise ValueError(f"sample_overrides.{identifier}: playbook does not define a ParamSpace")
                     space = ParamSpace.from_params(config["_v03_space"])
                     if set(values) != set(space.start.values):
                         raise ValueError(f"sample_overrides.{identifier}: expected all configured parameter keys")
@@ -838,8 +862,9 @@ class ZemiComponent:
         for group_index, group in enumerate(groups):
             if not isinstance(group, Mapping):
                 raise ValueError(f"arsenals[{group_index}] must be a table")
+            no_arsenal = group.get("_v03_no_arsenal") is True
             name = group.get("name")
-            if not isinstance(name, str) or not name:
+            if not no_arsenal and (not isinstance(name, str) or not name):
                 raise ValueError(f"arsenals[{group_index}].name must be a non-empty string")
             managed = group.get("arsenal_start_and_stop_at_job_level")
             if not isinstance(managed, bool):
@@ -874,7 +899,9 @@ class ZemiComponent:
                     raise ValueError(f"arsenals[{group_index}].playbooks_params[{local_index}].playbook_params must be a table")
                 label = f"arsenals[{group_index}].playbooks_params[{local_index}].playbook_params"
                 raw, reference_origins = reference_resolver.resolve_table(raw, label)
-                if group.get("_legacy"):
+                if no_arsenal:
+                    pass
+                elif group.get("_legacy"):
                     if arsenal_config_path is not None and raw.get("arsenal_config_path") != arsenal_config_path:
                         raise ValueError(f"{label}.arsenal_config_path must match the shared component_params.arsenal.arsenal_config_path")
                 elif managed:
@@ -897,12 +924,13 @@ class ZemiComponent:
                 else:
                     variants = _resolve_playbook_params(raw, label, config["playbook_name"], reference_origins)
                 for trial_index, (params, resolved) in enumerate(variants):
-                    if "_v03_samples" in config:
+                    if "_v03_samples" in config and not no_arsenal:
                         if arsenal_config_path is not None:
                             params["arsenal_config_path"] = arsenal_config_path
                         params["arsenal_start_and_stop_at_job_level"] = config.get("_v03_lifecycle") in {"job", "external"}
                     playbook = Playbook(self, config, config_index=config_index, trial_index=trial_index, params=params, resolved_params=resolved)
                     playbook.playbook_id = config.get("playbook_id")
+                    playbook.arsenal_id = config.get("_v03_arsenal")
                     playbook.sampler_config = copy.deepcopy(config.get("_v03_sampler"))
                     playbooks.append(playbook); group_playbooks.append(playbook)
                 config_index += 1
@@ -913,7 +941,7 @@ class ZemiComponent:
         from .dataset import resolve_adapter
         prepared = {}
         for playbook in self.playbooks:
-            if not playbook.enabled or not playbook.sampler_config:
+            if not playbook.enabled or playbook.param_space_mode != "sampler":
                 continue
             config = playbook.sampler_config["sample_trial"]
             try:
@@ -957,6 +985,7 @@ class ZemiComponent:
                                objective_metric=objective["metric"], direction=objective["direction"],
                                _label=f"playbooks.{playbook.playbook_id}.sampler")
         parent = {"playbook_trial_id": playbook.playbook_id, "playbook_id": playbook.playbook_id,
+                  "arsenal": playbook.arsenal_id,
                   "param_space_mode": playbook.param_space_mode,
                   "sampler": {key: copy.deepcopy(config[key]) for key in ("strategy", "max_samples", "seed", "blocks") if key in config},
                   "started_at": _timestamp(), "finished_at": None, "status": "running", "samples": [],
@@ -1053,7 +1082,7 @@ class ZemiComponent:
                     arsenal.begin(session, stop_before_begin=True)
                 for playbook in enabled_playbooks:
                     try:
-                        if playbook.sampler_config:
+                        if playbook.param_space_mode == "sampler":
                             self._run_dataset(playbook, prepared[playbook.playbook_id], session=session)
                         else:
                             if session is not None:

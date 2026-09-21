@@ -93,16 +93,18 @@ class SecretStore:
         raise ArsenalEnvError(f"unsupported validation rule {rule!r}")
 
     def resolve(self, reference: dict[str, object]) -> str:
-        name, rule = str(reference["env"]), str(reference.get("validate", "non_empty"))
+        name = str(reference["env"])
+        configured_rule = reference.get("validate")
+        rule = str(configured_rule) if configured_rule is not None else None
         current = self.get(name)
-        if current is not None and self.valid(current, rule): return current
+        if current is not None and (rule is None or self.valid(current, rule)): return current
         prompt = str(reference.get("prompt") or f"Enter {name}"); suggested = reference.get("suggested")
         if suggested is not None: prompt += f" [{suggested}]"
         while True:
             try: answer = getpass.getpass(prompt + ": ") if reference.get("secret") is True else input(prompt + ": ")
             except (EOFError, KeyboardInterrupt) as error: raise ArsenalEnvError(f"interactive input for {name} was cancelled or unavailable") from error
             if not answer and suggested is not None: answer = str(suggested)
-            if self.valid(answer, rule): self.set(name, answer); return answer
+            if rule is None or self.valid(answer, rule): self.set(name, answer); return answer
             print(f"Invalid value for {name} ({rule}); try again or press Ctrl+C to cancel.")
 
     def _acl(self) -> None:

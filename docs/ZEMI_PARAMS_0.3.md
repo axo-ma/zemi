@@ -29,16 +29,16 @@ are allowed only below a `params` section. The four user parameter scopes are:
 There is no automatic inheritance between these scopes. Values move between
 scopes only through `ref` or `__include__`.
 
-The optimizer is an implementation detail of a sampler. It is not a separate
-top-level configuration object. DSPy MAY be used inside a notebook/playbook or
-a sampler adapter, but ZEMI MUST NOT require `dspy.Module`, `forward`, or any
-other DSPy program shape.
+The sampler owns proposal and observation state; there is no separate optimizer
+configuration object. DSPy MAY be used inside a notebook/playbook or a sampler
+adapter, but ZEMI MUST NOT require `dspy.Module`, `forward`, or any other DSPy
+program shape.
 
 ## 2. Canonical document shape
 
 The canonical top-level keys are `system`, `component`, `arsenals`, and
 `playbooks`. A Params 0.3 document MUST contain `system.version = "0.3"`, one
-`[component]`, one or more `[[arsenals]]`, and one or more `[[playbooks]]`.
+`[component]`, zero or more `[[arsenals]]`, and one or more `[[playbooks]]`.
 
 Every structural table is closed: an unknown built-in key is an error. The
 contents of its `params` child are open and JSON-compatible, subject to the
@@ -193,9 +193,9 @@ namespaces. Duplicate ids are therefore forbidden.
 - `id` (required non-empty string): document-unique stable identifier using the
   same syntax as Arsenal ids.
 - `path` (required non-empty relative path or `@comp/...` path): source notebook.
-- `arsenal` (required string): exact parent Arsenal id. The referenced Arsenal
-  MUST exist. This explicit edge replaces containment-based or inferred parent
-  selection.
+- `arsenal` (optional string): exact Arsenal id. When present, the referenced
+  Arsenal MUST exist. When absent, the Playbook runs without Arsenal lifecycle
+  management or injected Arsenal service configuration.
 - `enabled` (optional boolean or `select` wrapper, default `true`).
 - `param_space_mode` (conditionally required enum or `select` wrapper): exactly
   `"start_only"` or `"sampler"`. It MUST be present when `params` resolves to
@@ -203,20 +203,19 @@ namespaces. Duplicate ids are therefore forbidden.
   `select` wrapper is resolved once while loading the job and becomes the fixed
   mode; it never creates a ParamSpace dimension.
 - `params` (optional table): user parameters and the playbook `ParamSpace`.
-- `sampler` (optional table): sampling policy and SampleTrial definition. It is
-  required exactly when the resolved `param_space_mode` is `"sampler"`.
+- `sampler` (conditionally required table): sampling policy. It is required for
+  every variable ParamSpace, in both execution modes.
 
-`param_space_mode = "start_only"` builds and executes exactly one ParamSample:
-the `start` value of every variable dimension plus every fixed parameter. It is
-intended for ordinary one-off execution, troubleshooting, and smoke tests. It
-MUST NOT have a `sampler` section. `param_space_mode = "sampler"` passes the
-complete ParamSpace to the configured sampler and executes its
-sampling/optimization lifecycle. It MUST have a `sampler` section.
+`param_space_mode = "start_only"` validates the sampler policy but performs no
+sampling. It executes one ordinary PlaybookRun with the `start` value of every
+variable dimension plus every fixed parameter; it creates no SampleTrial and
+loads no dataset or evaluator. `param_space_mode = "sampler"` passes the complete
+ParamSpace to the configured sampler and executes its SampleTrial lifecycle.
 
-When all resolved playbook parameters are fixed and no sampler exists,
-`param_space_mode` MAY be omitted and is equivalent to `"start_only"`. There is
-no implicit fallback for a variable ParamSpace: omitting the mode is an error,
-not a request to run only the start sample.
+When all resolved playbook parameters are fixed, ZEMI creates no ParamSpace and
+both `param_space_mode` and `sampler` MUST be absent. The Playbook executes once
+as an ordinary run. There is no implicit fallback for a variable ParamSpace:
+omitting either its mode or sampler is an error.
 
 ### 3.5 `sampler`
 
@@ -231,7 +230,8 @@ not a request to run only the start sample.
   resolved ParamSpace, MUST NOT name fixed parameters, and MUST NOT occur in
   more than one block. Unlisted variable dimensions become singleton blocks in
   declaration order.
-- `sample_trial` (required table): dataset, evaluator, and objective contract.
+- `sample_trial` (required only in `sampler` mode): dataset, evaluator, and
+  objective contract. It MAY be omitted in `start_only` mode.
 
 An implementation MAY expose strategy-specific adapters, including one backed
 by DSPy, but they obey the same `propose(history)` / `observe(...)` contract.
@@ -273,10 +273,11 @@ MUST equal one member with type-sensitive equality. `range` MUST contain exactly
 exactly its domain key and `start`. This keeps the start value beside the domain
 description.
 
-`ParamSpace` is the ordered collection of variable dimensions after reference
-resolution. TOML declaration order is preserved. `ParamSample` is one immutable
-mapping of every resolved playbook parameter to a concrete value. Fixed values
-are included in every ParamSample.
+`ParamSpace` exists only when at least one variable dimension remains after
+reference resolution; its declaration order is preserved. A fixed-only
+Playbook has no ParamSpace. `ParamSample` is one immutable mapping of every
+resolved playbook parameter to a concrete value. Fixed values are included in
+every ParamSample for variable Playbooks.
 
 For example, a troubleshooting run can retain the complete search space while
 executing only its declared start point:
@@ -290,6 +291,9 @@ param_space_mode = "start_only"
 
 [playbooks.params]
 threshold = { range = { min = 0.1, max = 0.9, step = 0.1 }, start = 0.5 }
+
+[playbooks.sampler]
+strategy = "grid"
 ```
 
 The mode itself can be chosen interactively without adding a dimension:
@@ -327,10 +331,11 @@ Resolution is deterministic:
 7. Within one table, apply `__include__` entries left-to-right; later includes
    replace earlier keys, then local keys replace all included keys.
 8. Resolve `select` and `input` once, including `param_space_mode`, then validate
-   variable wrappers and mode/sampler consistency and construct ParamSpace and
-   its start ParamSample.
-9. In `start_only` mode execute only the start ParamSample; in `sampler` mode
-   pass ParamSpace to the configured sampler.
+   variable wrappers and mode/sampler consistency. Construct ParamSpace only
+   when variable dimensions exist.
+9. For fixed-only Playbooks, execute one ordinary PlaybookRun. In `start_only`
+   mode validate the sampler and execute the start values as one ordinary
+   PlaybookRun; in `sampler` mode pass ParamSpace to the configured sampler.
 10. For each sampler proposal, overlay only the sampled dimension values onto the fixed
    resolved playbook params.
 
@@ -341,7 +346,7 @@ ref/include explicitly connects them.
 
 ## 6. Trials and execution lifecycle
 
-The single normative hierarchy is:
+The full sampler-mode hierarchy is:
 
 `JobTrial → PlaybookTrial → SampleTrial → PlaybookRun`
 
@@ -349,6 +354,9 @@ The single normative hierarchy is:
 - `PlaybookTrial`: one enabled playbook traversing its ParamSpace.
 - `SampleTrial`: one ParamSample evaluated against the complete dataset.
 - `PlaybookRun`: one execution of that playbook for one dataset item.
+
+Fixed-only and `start_only` executions stop at an ordinary PlaybookRun beneath
+the PlaybookTrial; they do not synthesize SampleTrial or dataset-item records.
 
 For each `sampler` PlaybookTrial the conceptual outer loop is:
 
@@ -395,14 +403,15 @@ id. Besides the field rules above, ZEMI MUST reject:
 - unknown top-level or structural keys;
 - arbitrary keys outside `params`;
 - duplicate Arsenal or playbook ids;
-- missing parent Arsenal references;
+- unknown Arsenal references;
 - absolute filesystem paths in configuration;
 - unsupported strategy, direction, adapter shape, or parameter wrapper;
 - malformed sampler blocks, unknown or fixed block members, or a dimension
   repeated across blocks;
-- a variable ParamSpace without `param_space_mode`;
-- `param_space_mode = "sampler"` without `sampler`, `sampler` without that
-  mode, and `sampler` combined with `param_space_mode = "start_only"`;
+- a variable ParamSpace without `param_space_mode` or without `sampler`;
+- sampler mode without `sample_trial`, or without its complete dataset,
+  evaluator, and objective contract;
+- a fixed-only Playbook with `param_space_mode` or `sampler`;
 - duplicate ParamSamples proposed by a sampler;
 - evaluator results without the objective metric.
 
@@ -435,8 +444,9 @@ Canonical mappings are:
 
 Migration tools and manual migrations MUST also choose an explicit
 `param_space_mode` whenever the migrated playbook contains `values` or `range`.
-Use `"start_only"` to preserve a deliberate single-start troubleshooting run,
-or `"sampler"` together with `[playbooks.sampler]` for search. Earlier behavior
+Use `"start_only"` together with a sampler policy to preserve a deliberate
+single-start troubleshooting run, or `"sampler"` with a full `sample_trial`
+contract for search. Earlier behavior
 where a variable ParamSpace without a sampler silently ran only its start sample
 is intentionally rejected because it hid configuration mistakes.
 

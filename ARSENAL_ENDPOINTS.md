@@ -16,11 +16,12 @@ Arsenal reads user-entered values only from:
 @inst/_secrets/arsenal.env
 ```
 
-The rule is deliberately simple: if the value exists and validates, use it; if
-not, ask with `input()` or, for `secret = true`, `getpass.getpass()`, validate,
-save, and use it. This is identical in a terminal and an interactive notebook.
-There is no fallback to process/system environment variables and the file is
-not loaded into `os.environ`.
+Here `env` is the key in this persistent store, not a process-environment
+variable. If the value exists (and, when configured, validates), use it. If not,
+ask with `input()` or, for `secret = true`, `getpass.getpass()`, optionally
+validate, save, and use it. Visible and hidden entries have identical persistence;
+`secret` controls only echo. There is no process/system environment fallback and
+the file is not loaded into `os.environ`.
 
 ```toml
 api_key = { env = "OPENROUTER_API_KEY", prompt = "Введите API-ключ OpenRouter", secret = true }
@@ -28,7 +29,8 @@ base_url = { env = "HOST_LLM_BASE_URL", prompt = "Введите URL локал�
 model = { env = "HOST_LLM_MODEL", prompt = "Введите model ID внешнего сервера", validate = "non_empty" }
 ```
 
-Pressing Enter accepts `suggested`. Invalid values are requested again; EOF or
+`validate` is optional and separate from persistence; supported rules are
+`non_empty`, `url`, and `port`. Pressing Enter accepts `suggested`. Invalid values are requested again; EOF or
 cancel produces a finite, explicit error. To rotate a value or force the next
 session to ask again, safely remove only its `NAME=value` line from
 `arsenal.env`. Existing clients retain the value already read; a new session or
@@ -40,6 +42,9 @@ unrelated keys, locks concurrent updates, and replaces the file atomically.
 Windows ACL restriction is best effort and emits a warning if it cannot be
 applied. Never add this file to a component, template, Git, run artifact, or
 report.
+
+This mechanism is distinct from Params `{ input = ... }`: Params input is a
+typed value resolved for the current job and is never written to `arsenal.env`.
 
 ## Managed and external lifecycle
 

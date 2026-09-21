@@ -109,9 +109,9 @@ def validate_document(document: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError("component.stop_on_error must be boolean")
     component["params"] = _params(component.get("params", {}), "component.params")
 
-    arsenals = doc.get("arsenals")
-    if not isinstance(arsenals, list) or not arsenals:
-        raise ValueError("arsenals must be a non-empty array of tables")
+    arsenals = doc.get("arsenals", [])
+    if not isinstance(arsenals, list):
+        raise ValueError("arsenals must be an array of tables")
     arsenal_ids: set[str] = set()
     normalized_arsenals = []
     for index, raw in enumerate(arsenals):
@@ -145,8 +145,11 @@ def validate_document(document: Mapping[str, Any]) -> dict[str, Any]:
         playbook_ids.add(item_id)
         _path(item.get("path"), f"{label}.path")
         parent = item.get("arsenal")
-        if parent not in arsenal_ids:
-            raise ValueError(f"{label}.arsenal references missing Arsenal {parent!r}")
+        if parent is not None:
+            if not isinstance(parent, str) or not parent:
+                raise ValueError(f"{label}.arsenal must be a non-empty Arsenal id")
+            if parent not in arsenal_ids:
+                raise ValueError(f"{label}.arsenal references missing Arsenal {parent!r}")
         if not isinstance(item.get("enabled", True), (bool, Mapping)):
             raise ValueError(f"{label}.enabled must be boolean or a select wrapper")
         mode = item.get("param_space_mode")
@@ -157,25 +160,27 @@ def validate_document(document: Mapping[str, Any]) -> dict[str, Any]:
         if "sampler" in item:
             item["sampler"] = _validate_sampler(item["sampler"], f"{label}.sampler")
         literal_mode = item.get("param_space_mode")
-        if isinstance(literal_mode, str):
-            if literal_mode == "sampler" and "sampler" not in item:
-                raise ValueError(
-                    f'{label}.param_space_mode = "sampler" requires {label}.sampler'
-                )
-            if literal_mode == "start_only" and "sampler" in item:
-                raise ValueError(
-                    f'{label}.sampler is not allowed when {label}.param_space_mode = "start_only"'
-                )
-        elif literal_mode is None and "sampler" in item:
-            raise ValueError(
-                f'{label}.param_space_mode must be "sampler" when {label}.sampler is configured'
-            )
-        elif literal_mode is None and dimensions:
+        if dimensions:
             names = ", ".join(dimension.name for dimension in dimensions)
-            raise ValueError(
-                f"{label}.param_space_mode is required because {label}.params "
-                f"defines variable dimensions: {names}"
-            )
+            if "sampler" not in item:
+                raise ValueError(
+                    f"{label}.sampler is required because {label}.params "
+                    f"defines variable dimensions: {names}"
+                )
+            if literal_mode is None:
+                raise ValueError(
+                    f"{label}.param_space_mode is required because {label}.params "
+                    f"defines variable dimensions: {names}"
+                )
+            if literal_mode == "sampler" and "sample_trial" not in item["sampler"]:
+                raise ValueError(
+                    f'{label}.sampler.sample_trial is required when {label}.param_space_mode = "sampler"'
+                )
+        elif not _may_resolve_dimensions(item["params"]):
+            if "sampler" in item:
+                raise ValueError(f"{label}.sampler is not allowed because {label}.params are all fixed")
+            if literal_mode is not None:
+                raise ValueError(f"{label}.param_space_mode is not allowed because {label}.params are all fixed")
         normalized_playbooks.append(item)
     return {"system": system, "component": component, "arsenals": normalized_arsenals, "playbooks": normalized_playbooks}
 
@@ -197,7 +202,9 @@ def _validate_sampler(raw: Any, label: str) -> dict[str, Any]:
         sampler["blocks"] = _validate_blocks_shape(blocks, f"{label}.blocks")
     elif blocks is not None:
         raise ValueError(f"{label}.blocks is valid only for block_coordinate")
-    trial = _table(sampler.get("sample_trial"), f"{label}.sample_trial")
+    if "sample_trial" not in sampler:
+        return sampler
+    trial = _table(sampler["sample_trial"], f"{label}.sample_trial")
     _closed(trial, _TRIAL_KEYS, f"{label}.sample_trial")
     dataset = _table(trial.get("dataset"), f"{label}.sample_trial.dataset")
     _closed(dataset, _DATASET_KEYS, f"{label}.sample_trial.dataset")
@@ -226,6 +233,16 @@ def _validate_sampler(raw: Any, label: str) -> dict[str, Any]:
         trial["run"] = adapter
     sampler["sample_trial"] = trial
     return sampler
+
+
+def _may_resolve_dimensions(value: Any) -> bool:
+    if isinstance(value, Mapping):
+        if "ref" in value or "__include__" in value:
+            return True
+        return any(_may_resolve_dimensions(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_may_resolve_dimensions(item) for item in value)
+    return False
 
 
 def _validate_blocks_shape(raw: Any, label: str) -> list[list[str]]:
