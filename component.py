@@ -19,11 +19,11 @@ from typing import Any, Mapping
 
 from . import env
 from .playbook import PLAYBOOK_OUTPUT_MIME, _output_context, validate_output_params
-from .params import ParamSample, ParamSampler, ParamSpace, validate_document
+from .params import ParamSample, ParamSpace, PlaybookOptimizer, validate_document
 
 
 def _canonical_runtime(document: Mapping[str, Any]) -> dict[str, Any]:
-    """Resolve a Params 0.3 document and adapt it to the established runner."""
+    """Resolve a Params 0.5 document and adapt it to the established runner."""
     canonical = validate_document(document)
     reference_document: dict[str, Any] = {
         "system": canonical["system"],
@@ -53,7 +53,7 @@ def _canonical_runtime(document: Mapping[str, Any]) -> dict[str, Any]:
         raw, origins = _ParamReferenceResolver(reference_document).resolve_table(table, label)
         variants = _resolve_playbook_params(raw, label, owner, origins)
         if len(variants) != 1:
-            raise ValueError(f"{label} must not use legacy each wrappers in Params 0.3")
+            raise ValueError(f"{label} must not use legacy each wrappers in Params 0.5")
         return variants[0][0]
 
     system_params = resolved_params(canonical["system"]["params"], "system.params", "system")
@@ -77,74 +77,28 @@ def _canonical_runtime(document: Mapping[str, Any]) -> dict[str, Any]:
         label = f"playbooks.{playbook['id']}.params"
         playbook_params = resolved_params(playbook["params"], label, playbook["id"])
         reference_document["playbooks"][playbook["id"]]["params"] = playbook_params
-        candidate_space = ParamSpace.from_params(playbook_params, label)
+        candidate_space = ParamSpace(config=playbook_params, label=label)
         space = candidate_space if candidate_space.dimensions else None
-        mode = playbook.get("param_space_mode")
-        if isinstance(mode, Mapping):
-            resolved_mode = resolved_params(
-                {"param_space_mode": mode},
-                f"playbooks.{playbook['id']}",
-                playbook["id"],
-            )
-            mode = resolved_mode["param_space_mode"]
-        sampler_config = playbook.get("sampler")
+        optimizer_config = playbook.get("optimizer")
         if space is None:
-            if sampler_config is not None:
-                raise ValueError(f"playbooks.{playbook['id']}.sampler is not allowed because its params are all fixed")
-            if mode is not None:
-                raise ValueError(f"playbooks.{playbook['id']}.param_space_mode is not allowed because its params are all fixed")
+            if optimizer_config is not None:
+                raise ValueError(f"playbooks.{playbook['id']}.optimizer is not allowed because its params are all fixed")
             samples = [copy.deepcopy(playbook_params)]
         else:
             names = ", ".join(dimension.name for dimension in space.dimensions)
-            if sampler_config is None:
+            if optimizer_config is None:
                 raise ValueError(
-                    f"playbooks.{playbook['id']}.sampler is required because its params "
+                    f"playbooks.{playbook['id']}.optimizer is required because its params "
                     f"define variable dimensions: {names}"
-                )
-            if mode is None:
-                raise ValueError(
-                    f"playbooks.{playbook['id']}.param_space_mode is required because its params "
-                    f"define variable dimensions: {names}"
-                )
-            if mode == "sampler" and "sample_trial" not in sampler_config:
-                raise ValueError(
-                    f'playbooks.{playbook["id"]}.sampler.sample_trial is required when '
-                    f'param_space_mode = "sampler"'
-                )
-            if mode == "sampler" and "objective" not in sampler_config:
-                raise ValueError(
-                    f'playbooks.{playbook["id"]}.sampler.objective is required when '
-                    f'param_space_mode = "sampler"'
                 )
             samples = [space.start]
-        if sampler_config and "sample_trial" in sampler_config:
-            trial_config = sampler_config["sample_trial"]
-            if "_legacy" in trial_config:
-                legacy = trial_config["_legacy"]
-                for section in ("dataset", "evaluator", "run"):
-                    if section in legacy:
-                        legacy[section]["params"] = resolved_params(
-                            legacy[section]["params"],
-                            f"playbooks.{playbook['id']}.sampler.sample_trial.{section}.params",
-                            playbook["id"],
-                        )
-            else:
-                trial_config["params"] = resolved_params(
-                    trial_config["params"],
-                    f"playbooks.{playbook['id']}.sampler.sample_trial.params",
-                    playbook["id"],
-                )
-        if sampler_config:
-            sampler = ParamSampler(
-                space,
-                sampler_config["strategy"],
-                max_samples=sampler_config.get("max_samples"),
-                seed=sampler_config.get("seed"),
-                blocks=sampler_config.get("blocks"),
-                objective_metric=sampler_config.get("objective", {}).get("metric", "score"),
-                direction=sampler_config.get("objective", {}).get("direction", "maximize"),
-                _label=f"playbooks.{playbook['id']}.sampler",
+            trial_config = optimizer_config["sample_trial"]
+            trial_config["params"] = resolved_params(
+                trial_config["params"],
+                f"playbooks.{playbook['id']}.optimizer.sample_trial.params",
+                playbook["id"],
             )
+            PlaybookOptimizer(config=optimizer_config, param_space=space)
         arsenal_id = playbook.get("arsenal")
         if arsenal_id is None:
             groups.setdefault(None, {
@@ -152,22 +106,21 @@ def _canonical_runtime(document: Mapping[str, Any]) -> dict[str, Any]:
                 "arsenal_config_path": None,
                 "arsenal_start_and_stop_at_job_level": False,
                 "playbooks_params": [],
-                "_v03_no_arsenal": True,
+                "_v05_no_arsenal": True,
             })
         groups[arsenal_id]["playbooks_params"].append({
             "playbook_name": playbook["path"].removeprefix("@comp/"),
             "playbook_id": playbook["id"],
             "enabled": playbook.get("enabled", True),
             "playbook_params": playbook_params,
-            "_v03_samples": [
+            "_v05_samples": [
                 copy.deepcopy(dict(sample.values) if isinstance(sample, ParamSample) else sample)
                 for sample in samples
             ],
-            "_v03_sampler": copy.deepcopy(sampler_config),
-            "_v03_param_space_mode": mode,
-            "_v03_space": copy.deepcopy(playbook_params) if space is not None else None,
-            "_v03_arsenal": arsenal_id,
-            "_v03_lifecycle": (
+            "_v05_optimizer": copy.deepcopy(optimizer_config),
+            "_v05_space": copy.deepcopy(playbook_params) if space is not None else None,
+            "_v05_arsenal": arsenal_id,
+            "_v05_lifecycle": (
                 reference_document["arsenals"][arsenal_id]["lifecycle"]
                 if arsenal_id is not None else None
             ),
@@ -181,7 +134,7 @@ def _canonical_runtime(document: Mapping[str, Any]) -> dict[str, Any]:
             **component_params,
         },
         "arsenals": list(groups.values()),
-        "_params_03": canonical,
+        "_params_05": canonical,
     }
 
 
@@ -575,7 +528,7 @@ class ComponentReport:
                 if str(input_params[name]):
                     self._secret_values.add(str(input_params[name]))
                 input_params[name] = "***"
-        entry = {"trial_id": playbook.trial_id, "playbook_name": playbook.playbook_name, "arsenal": playbook.arsenal_id, "param_space_mode": playbook.param_space_mode, "input_params": input_params, "resolved_params": copy.deepcopy(playbook.resolved_params), "output_params": {}, "output_notebook": playbook.output_relative.as_posix(), "output_html": playbook.output_html_relative.as_posix(), "output_markdown": playbook.output_markdown_relative.as_posix(), "output_path": playbook.output_relative.as_posix(), "started_at": _timestamp(), "finished_at": None, "duration_seconds": None, "status": "running", "error": None}
+        entry = {"trial_id": playbook.trial_id, "playbook_name": playbook.playbook_name, "arsenal": playbook.arsenal_id, "input_params": input_params, "resolved_params": copy.deepcopy(playbook.resolved_params), "output_params": {}, "output_notebook": playbook.output_relative.as_posix(), "output_html": playbook.output_html_relative.as_posix(), "output_markdown": playbook.output_markdown_relative.as_posix(), "output_path": playbook.output_relative.as_posix(), "started_at": _timestamp(), "finished_at": None, "duration_seconds": None, "status": "running", "error": None}
         self.data["trials"].append(entry)
         self.save()
         return entry
@@ -648,8 +601,7 @@ class Playbook:
         self.enabled = config.get("enabled", True)
         if not isinstance(self.enabled, bool):
             raise ValueError(f"enabled must be boolean for {self.playbook_name!r}")
-        self.param_space_mode = config.get("_v03_param_space_mode")
-        self.arsenal_id = config.get("_v03_arsenal")
+        self.arsenal_id = config.get("_v05_arsenal")
         configured = config.get("playbook_params", {}) if params is None else params
         if not isinstance(configured, Mapping):
             raise ValueError(f"playbook_params must be a table for {self.playbook_name!r}")
@@ -818,8 +770,8 @@ class ZemiComponent:
         self.root = env.path.comp.root; self.params_path = _select_params_path(self.root, params_file)
         with self.params_path.open("rb") as file:
             self.params = tomllib.load(file)
-        self.params_03 = "system" in self.params
-        if self.params_03:
+        self.params_05 = "system" in self.params
+        if self.params_05:
             self.params = _canonical_runtime(self.params)
             remaining = set(sample_overrides or {})
             for group in self.params["arsenals"]:
@@ -828,9 +780,9 @@ class ZemiComponent:
                     if identifier not in remaining:
                         continue
                     values = validate_output_params(sample_overrides[identifier])
-                    if config["_v03_space"] is None:
+                    if config["_v05_space"] is None:
                         raise ValueError(f"sample_overrides.{identifier}: playbook does not define a ParamSpace")
-                    space = ParamSpace.from_params(config["_v03_space"])
+                    space = ParamSpace(config=config["_v05_space"])
                     if set(values) != set(space.start.values):
                         raise ValueError(f"sample_overrides.{identifier}: expected all configured parameter keys")
                     for key, value in space.fixed.items():
@@ -839,19 +791,19 @@ class ZemiComponent:
                     for dimension in space.dimensions:
                         if json.dumps(values[dimension.name], sort_keys=True) not in [json.dumps(v, sort_keys=True) for v in dimension.values]:
                             raise ValueError(f"sample_overrides.{identifier}.{dimension.name}: value outside domain")
-                    config["_v03_space"] = values
-                    config["_v03_samples"] = [values]
-                    if config["_v03_sampler"]:
-                        config["_v03_sampler"].update(strategy="grid", max_samples=1)
-                        config["_v03_sampler"].pop("blocks", None)
+                    config["_v05_space"] = values
+                    config["_v05_samples"] = [values]
+                    if config["_v05_optimizer"]:
+                        config["_v05_optimizer"].update(strategy="grid", max_samples=1)
+                        config["_v05_optimizer"].pop("blocks", None)
                     remaining.remove(identifier)
             if remaining:
                 raise ValueError(f"sample_overrides: unknown playbook ids {sorted(remaining)}")
         else:
             if sample_overrides:
-                raise ValueError("sample_overrides requires Params 0.3")
+                raise ValueError("sample_overrides requires Params 0.5")
             warnings.warn(
-                "Legacy ZEMI parameter schema is deprecated; migrate to Params 0.3",
+                "Legacy ZEMI parameter schema is deprecated; migrate to Params 0.5",
                 DeprecationWarning,
                 stacklevel=2,
             )
@@ -904,7 +856,7 @@ class ZemiComponent:
         for group_index, group in enumerate(groups):
             if not isinstance(group, Mapping):
                 raise ValueError(f"arsenals[{group_index}] must be a table")
-            no_arsenal = group.get("_v03_no_arsenal") is True
+            no_arsenal = group.get("_v05_no_arsenal") is True
             name = group.get("name")
             if not no_arsenal and (not isinstance(name, str) or not name):
                 raise ValueError(f"arsenals[{group_index}].name must be a non-empty string")
@@ -958,34 +910,34 @@ class ZemiComponent:
                     raw["arsenal_start_and_stop_at_job_level"] = False
                     if arsenal_config_path is not None:
                         raw.setdefault("arsenal_config_path", arsenal_config_path)
-                if "_v03_samples" in config:
+                if "_v05_samples" in config:
                     variants = [
                         (copy.deepcopy(sample), copy.deepcopy(reference_origins))
-                        for sample in config["_v03_samples"]
+                        for sample in config["_v05_samples"]
                     ]
                 else:
                     variants = _resolve_playbook_params(raw, label, config["playbook_name"], reference_origins)
                 for trial_index, (params, resolved) in enumerate(variants):
-                    if "_v03_samples" in config and not no_arsenal:
+                    if "_v05_samples" in config and not no_arsenal:
                         if arsenal_config_path is not None:
                             params["arsenal_config_path"] = arsenal_config_path
-                        params["arsenal_start_and_stop_at_job_level"] = config.get("_v03_lifecycle") in {"job", "external"}
+                        params["arsenal_start_and_stop_at_job_level"] = config.get("_v05_lifecycle") in {"job", "external"}
                     playbook = Playbook(self, config, config_index=config_index, trial_index=trial_index, params=params, resolved_params=resolved)
                     playbook.playbook_id = config.get("playbook_id")
-                    playbook.arsenal_id = config.get("_v03_arsenal")
-                    playbook.sampler_config = copy.deepcopy(config.get("_v03_sampler"))
+                    playbook.arsenal_id = config.get("_v05_arsenal")
+                    playbook.optimizer_config = copy.deepcopy(config.get("_v05_optimizer"))
                     playbooks.append(playbook); group_playbooks.append(playbook)
                 config_index += 1
             self._arsenal_groups.append((managed, arsenal_config_path, tuple(group_playbooks)))
         self.playbooks = tuple(playbooks); self._closed = False; self.report.save()
 
-    def _prepare_datasets(self):
+    def _prepare_sample_trials(self):
         from .sample_trial import resolve_sample_trial
         prepared = {}
         for playbook in self.playbooks:
-            if not playbook.enabled or playbook.param_space_mode != "sampler":
+            if not playbook.enabled or playbook.optimizer_config is None:
                 continue
-            config = playbook.sampler_config["sample_trial"]
+            config = playbook.optimizer_config["sample_trial"]
             try:
                 sample_trial = resolve_sample_trial(config, execute=lambda **kwargs: {})
                 items = list(sample_trial.load_dataset())
@@ -1004,7 +956,7 @@ class ZemiComponent:
                     ids.add(key)
                 prepared[playbook.playbook_id] = (items, sample_trial)
             except Exception as error:
-                raise ValueError(f"playbooks.{playbook.playbook_id}.sampler.sample_trial: {error}") from error
+                raise ValueError(f"playbooks.{playbook.playbook_id}.optimizer.sample_trial: {error}") from error
         return prepared
 
     @staticmethod
@@ -1016,20 +968,17 @@ class ZemiComponent:
             raise ValueError("model_name must be a non-empty string")
         session.model(model_name)
 
-    def _run_dataset(self, playbook, prepared, session=None):
+    def _run_optimization(self, playbook, prepared, session=None):
         items, sample_trial = prepared
-        config = playbook.sampler_config
-        objective = config["objective"]
-        sampler = ParamSampler(ParamSpace.from_params(playbook.config["_v03_space"]), config["strategy"],
-                               max_samples=config.get("max_samples"), seed=config.get("seed"), blocks=config.get("blocks"),
-                               objective_metric=objective["metric"], direction=objective["direction"],
-                               _label=f"playbooks.{playbook.playbook_id}.sampler")
+        config = playbook.optimizer_config
+        optimizer = PlaybookOptimizer(
+            config=config,
+            param_space=ParamSpace(config=playbook.config["_v05_space"]),
+        )
         parent = {"playbook_trial_id": playbook.playbook_id, "playbook_id": playbook.playbook_id,
                   "arsenal": playbook.arsenal_id,
-                  "param_space_mode": playbook.param_space_mode,
                   "report_markdown": f"sample_trials/{playbook.playbook_id}.report.md",
-                  "sampler": {key: copy.deepcopy(config[key]) for key in ("strategy", "max_samples", "seed", "blocks") if key in config},
-                  "objective": copy.deepcopy(objective),
+                  "optimizer": {key: copy.deepcopy(config[key]) for key in ("strategy", "max_samples", "seed", "blocks") if key in config},
                   "started_at": _timestamp(), "finished_at": None, "status": "running", "samples": [],
                   "ranking": [], "best_sample": None}
         self.report.data.setdefault("job_trial", {"job_trial_id": self.run_directory.name, "playbook_trials": []})["playbook_trials"].append(parent)
@@ -1086,41 +1035,41 @@ class ZemiComponent:
                 "params": {key: ("***" if key in playbook.secret_param_names else value)
                            for key, value in trial.sample.values.items()},
                 "runs": trial.runs, "metrics": trial.metrics, "feedback": trial.feedback,
-                "score": trial.score, "objective_value": trial.score,
+                "score": trial.score,
                 "error": trial.error, "status": trial.status, "artifacts": trial.artifacts,
                 "run_errors": sum(r.get("status") == "failed" for r in trial.runs),
                 "started_at": trial.started_at, "finished_at": trial.finished_at})
             for record in trial.runs:
                 record["sample_trial_id"] = sample_id
             ranked = sorted((s for s in parent["samples"] if s["error"] is None),
-                            key=lambda s: s["score"], reverse=objective["direction"] == "maximize")
+                            key=lambda s: s["score"], reverse=True)
             parent["ranking"] = [s["sample_trial_id"] for s in ranked]
             parent["best_sample"] = parent["ranking"][0] if ranked else None
             parent["best_params"] = ranked[0]["params"] if ranked else None
             self.report.save()  # Persist the generic result before domain rendering.
-            best = sampler.best_sample(history)
+            best = optimizer.best_param_sample(history)
             self.report.set_sample_trial_markdown(
                 playbook.playbook_id,
-                sample_trial.render_report(history, parent["sampler"], best),
+                sample_trial.render_report(history, parent["optimizer"], best),
             )
             self.report.save()
 
         try:
-            while (sample := sampler.next_sample(history)) is not None:
+            while (sample := optimizer.next_param_sample(history)) is not None:
                 if sample.key() in {item.sample.key() for item in history}:
-                    raise ValueError("sampler proposed a duplicate ParamSample")
+                    raise ValueError("optimizer proposed a duplicate ParamSample")
                 started = _timestamp()
                 runs = []
                 try:
                     runs = sample_trial.run(playbook=playbook, sample=sample, dataset=items)
-                    metrics, feedback = sample_trial.evaluate(runs=runs)
-                    if not isinstance(metrics, Mapping) or objective["metric"] not in metrics:
-                        raise ValueError(f"SampleTrial metrics do not contain objective metric {objective['metric']!r}")
-                    score = metrics[objective["metric"]]
-                    trial = sample_trial.result(sample=sample, runs=runs, score=score, metrics=metrics,
+                    evaluated = sample_trial.evaluate(runs=runs)
+                    if not isinstance(evaluated, tuple) or len(evaluated) != 3:
+                        raise ValueError("SampleTrial.evaluate(runs) must return (metrics, score, feedback)")
+                    metrics, score, feedback = evaluated
+                    trial = sample_trial.result(param_sample=sample, runs=runs, score=score, metrics=metrics,
                                                feedback=feedback, started_at=started, finished_at=_timestamp())
                 except Exception as error:
-                    trial = sample_trial.result(sample=sample, runs=runs, score=None, metrics={},
+                    trial = sample_trial.result(param_sample=sample, runs=runs, score=None, metrics={},
                                                error=str(error), started_at=started, finished_at=_timestamp())
                 history.append(trial)
                 save_sample(trial)
@@ -1137,7 +1086,7 @@ class ZemiComponent:
     def run(self) -> None:
         first_error: BaseException | None = None
         try:
-            prepared = self._prepare_datasets()
+            prepared = self._prepare_sample_trials()
         except Exception as error:
             self.report.record_failure(error)
             raise
@@ -1154,8 +1103,8 @@ class ZemiComponent:
                     arsenal.begin(session, stop_before_begin=True)
                 for playbook in enabled_playbooks:
                     try:
-                        if playbook.param_space_mode == "sampler":
-                            self._run_dataset(playbook, prepared[playbook.playbook_id], session=session)
+                        if playbook.optimizer_config is not None:
+                            self._run_optimization(playbook, prepared[playbook.playbook_id], session=session)
                         else:
                             if session is not None:
                                 self._activate_managed_model(session, playbook.params)
@@ -1236,8 +1185,6 @@ def _output_markdown_table(output_params: Mapping[str, Any]) -> str:
 
 def _trial_summary_text(trial: Mapping[str, Any]) -> str:
     parts = [str(trial.get("trial_id") or trial.get("playbook_name") or "Trial")]
-    if trial.get("param_space_mode"):
-        parts.append(f"ParamSpace mode: {trial['param_space_mode']}")
     for name, value in trial.get("input_params", {}).items():
         if name in _SERVICE_INPUT_PARAMS or not isinstance(value, (str, int, float, bool)):
             continue
@@ -1371,12 +1318,10 @@ def _report_markdown(data: Mapping[str, Any], domain_sections: Mapping[str, str]
 def _sampling_markdown(data, domain_sections):
     lines = []
     for trial in data.get("job_trial", {}).get("playbook_trials", []):
-        lines.extend(("", f"## Sampling: {_markdown_cell(trial['playbook_id'])}", "",
-                      f"ParamSpace mode: `{trial.get('param_space_mode', 'sampler')}`", "",
+        lines.extend(("", f"## Optimization: {_markdown_cell(trial['playbook_id'])}", "",
                       (_markdown_link("Open detailed SampleTrial report", trial["report_markdown"])
                        if trial.get("report_markdown") else ""), "",
-                      "Sampler:", "", "```json", _display_value(trial.get("sampler", {})), "```", "",
-                      "Objective:", "", "```json", _display_value(trial.get("objective", {})), "```", "",
+                      "Optimizer:", "", "```json", _display_value(trial.get("optimizer", {})), "```", "",
                       f"Best sample: `{trial['best_sample']}`", "",
                       "Ranking: " + ", ".join(trial["ranking"]), ""))
         for sample in trial["samples"]:

@@ -1,7 +1,7 @@
 """ZEMI platform library."""
 
 from . import arsenal, env, params, playbook, toml
-from .params import ParamSample, ParamSampler, ParamSpace
+from .params import ParamSample, ParamSampler, ParamSpace, PlaybookOptimizer
 from .sample_trial import SampleTrial, TableDetectionSampleTrial
 from .inputs import InputStore
 from .component import ComponentReport, Playbook, ZemiComponent
@@ -17,6 +17,7 @@ __all__ = [
     "ParamSample",
     "ParamSampler",
     "ParamSpace",
+    "PlaybookOptimizer",
     "SampleTrial",
     "TableDetectionSampleTrial",
     "InputStore",

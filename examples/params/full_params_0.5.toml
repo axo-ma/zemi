@@ -1,5 +1,5 @@
 [system]
-version = "0.3"
+version = "0.5"
 
 [system.params]
 locale = "en"
@@ -36,7 +36,7 @@ lifecycle = "external"
 [arsenals.params]
 device = "remote"
 
-# A fixed Playbook needs neither Arsenal, ParamSpace, mode, nor sampler.
+# A fixed Playbook needs neither Arsenal, ParamSpace, nor optimizer.
 [[playbooks]]
 id = "prepare"
 path = "prepare.ipynb"
@@ -50,7 +50,6 @@ id = "summarize-local"
 path = "playbook.ipynb"
 arsenal = "local"
 enabled = true
-param_space_mode = "sampler"
 
 [playbooks.params]
 __include__ = { ref = "component.params.generation" }
@@ -59,20 +58,16 @@ device = { ref = "arsenals.local.params.device" }
 temperature = { values = [0.0, 0.2, 0.5], start = 0.2 }
 prompt_style = { values = ["brief", "detailed"], start = "brief" }
 
-[playbooks.sampler]
+[playbooks.optimizer]
 strategy = "grid"
 max_samples = 6
 seed = 17
 
-[playbooks.sampler.objective]
-metric = "f1"
-direction = "maximize"
+[playbooks.optimizer.sample_trial]
+type = "@comp/zemi/sample_trial.py:TableDetectionSampleTrial"
+dataset = "@comp/data/eval.json"
 
-[playbooks.sampler.sample_trial]
-implementation = "table_detection"
-path = "@comp/data/eval.json"
-
-[playbooks.sampler.sample_trial.params]
+[playbooks.optimizer.sample_trial.params]
 language = { ref = "system.params.locale" }
 
 [[playbooks]]
@@ -80,7 +75,6 @@ id = "extract-remote"
 path = "playbook_gbnf.ipynb"
 arsenal = "remote"
 enabled = true
-param_space_mode = "sampler"
 
 [playbooks.params]
 __include__ = [
@@ -91,19 +85,15 @@ device = { ref = "arsenals.remote.params.device" }
 schema_mode = { values = ["strict", "repair"], start = "strict" }
 temperature = { range = { min = 0.0, max = 0.4, step = 0.2 }, start = 0.0 }
 
-[playbooks.sampler]
+[playbooks.optimizer]
 strategy = "block_coordinate"
 max_samples = 5
 seed = 23
 blocks = [["schema_mode", "temperature"]]
 
-[playbooks.sampler.objective]
-metric = "f1"
-direction = "maximize"
+[playbooks.optimizer.sample_trial]
+type = "@comp/sample_trials/extraction.py:ExtractionSampleTrial"
+dataset = "@comp/data/extraction.csv"
 
-[playbooks.sampler.sample_trial]
-implementation = "@comp/sample_trials/extraction.py:ExtractionSampleTrial"
-path = "@comp/data/extraction.csv"
-
-[playbooks.sampler.sample_trial.params]
+[playbooks.optimizer.sample_trial.params]
 input_column = "text"

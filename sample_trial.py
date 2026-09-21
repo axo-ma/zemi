@@ -1,7 +1,6 @@
 """Public SampleTrial extension contract and built-in implementations."""
 from __future__ import annotations
 
-import hashlib
 import importlib.util
 import json
 import math
@@ -24,7 +23,7 @@ class SampleTrial:
     def __init__(self, config: Mapping[str, Any], *, execute: Callable[..., dict[str, Any]]) -> None:
         self.config = dict(config)
         self.params = dict(self.config.get("params", {}))
-        self.path = self.config.get("path")
+        self.dataset = self.config.get("dataset")
         self.execute = execute
 
     def load_dataset(self) -> list[Any]:
@@ -37,10 +36,10 @@ class SampleTrial:
         finally:
             context.close()
 
-    def evaluate(self, *, runs: Sequence[dict[str, Any]]) -> tuple[Mapping[str, Any], Any]:
+    def evaluate(self, *, runs: Sequence[dict[str, Any]]) -> tuple[Mapping[str, Any], float, Any]:
         raise NotImplementedError
 
-    def result(self, *, sample: ParamSample, runs: Sequence[dict[str, Any]], score: Any,
+    def result(self, *, param_sample: ParamSample, runs: Sequence[dict[str, Any]], score: Any,
                metrics: Mapping[str, Any], feedback: Any = None, error: str | None = None,
                started_at: str | None = None, finished_at: str | None = None) -> SampleTrialResult:
         if error is None:
@@ -63,13 +62,13 @@ class SampleTrial:
             if isinstance(run, Mapping) and run.get("artifacts"):
                 artifacts[str(run.get("playbook_run_id", len(artifacts)))] = run["artifacts"]
         return SampleTrialResult(
-            sample=sample, runs=list(runs), metrics=normalized, feedback=feedback,
+            sample=param_sample, runs=list(runs), metrics=normalized, feedback=feedback,
             error=error, started_at=started_at or _timestamp(),
             finished_at=finished_at or _timestamp(), score=float(score) if score is not None else None,
             status="failed" if error else "succeeded", artifacts=artifacts,
         )
 
-    def render_report(self, history: Sequence[SampleTrialResult], sampler_config: Mapping[str, Any],
+    def render_report(self, history: Sequence[SampleTrialResult], optimizer_config: Mapping[str, Any],
                       best_sample: ParamSample | None) -> str:
         return ""
 
@@ -78,13 +77,13 @@ class TableDetectionSampleTrial(SampleTrial):
     """Built-in exact table-boundary SampleTrial; score defaults to aggregate F1."""
 
     def load_dataset(self) -> list[Any]:
-        return list(table_dataset(path=self.path, params=self.params))
+        return list(table_dataset(path=self.dataset, params=self.params))
 
-    def evaluate(self, *, runs: Sequence[dict[str, Any]]) -> tuple[Mapping[str, Any], Any]:
+    def evaluate(self, *, runs: Sequence[dict[str, Any]]) -> tuple[Mapping[str, Any], float, Any]:
         metrics, feedback = table_evaluator(SimpleNamespace(runs=runs), params=self.params)
-        return metrics, feedback
+        return metrics, metrics["f1"], feedback
 
-    def render_report(self, history: Sequence[SampleTrialResult], sampler_config: Mapping[str, Any],
+    def render_report(self, history: Sequence[SampleTrialResult], optimizer_config: Mapping[str, Any],
                       best_sample: ParamSample | None) -> str:
         lines = ["### Table detection", ""]
         for ordinal, result in enumerate(history, 1):
@@ -130,35 +129,44 @@ class LegacySampleTrial(SampleTrial):
         finally:
             context.close()
 
-    def evaluate(self, *, runs: Sequence[dict[str, Any]]) -> tuple[Mapping[str, Any], Any]:
+    def evaluate(self, *, runs: Sequence[dict[str, Any]]) -> tuple[Mapping[str, Any], float, Any]:
         evaluated = self.evaluator(SimpleNamespace(runs=runs), params=self.evaluator_config.get("params", {}))
         metrics, feedback = evaluated if isinstance(evaluated, tuple) else (evaluated, None)
-        return metrics, feedback
+        metric = self.objective["metric"]
+        score = metrics[metric]
+        if self.objective.get("direction") == "minimize":
+            score = -score
+        return metrics, score, feedback
 
 
 def _load_custom(reference: str) -> Any:
     filename, name = reference.rsplit(":", 1)
+    if filename == "@comp/zemi/sample_trial.py":
+        implementation = globals().get(name)
+        if not isinstance(implementation, type):
+            raise ValueError(f"SampleTrial type {reference!r} is not a class")
+        return implementation
     file = zemi_path(filename)
     if not file.is_file():
         raise FileNotFoundError(f"SampleTrial implementation not found: {file}")
-    module_name = f"_zemi_sample_trial_{hashlib.sha256(str(file).encode()).hexdigest()}"
+    module_name = f"_zemi_sample_trial_{abs(hash(str(file.resolve())))}"
     spec = importlib.util.spec_from_file_location(module_name, file)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     implementation = getattr(module, name, None)
-    if not callable(implementation):
-        raise ValueError(f"SampleTrial implementation {reference!r} is not callable")
+    if not isinstance(implementation, type):
+        raise ValueError(f"SampleTrial type {reference!r} is not a class")
     return implementation
 
 
 def resolve_sample_trial(config: Mapping[str, Any], *, execute: Callable[..., dict[str, Any]]) -> SampleTrial:
-    implementation = config["implementation"]
-    if implementation == "table_detection":
-        instance = TableDetectionSampleTrial(config, execute=execute)
-    elif implementation == "legacy":
+    implementation = config.get("type")
+    if implementation == "legacy":
         instance = LegacySampleTrial(config, execute=execute)
     else:
         factory = _load_custom(implementation)
+        if not issubclass(factory, SampleTrial):
+            raise ValueError(f"SampleTrial type {implementation!r} must inherit SampleTrial")
         instance = factory(config=config, execute=execute)
     required = ("load_dataset", "run", "evaluate", "result", "render_report")
     missing = [name for name in required if not callable(getattr(instance, name, None))]
