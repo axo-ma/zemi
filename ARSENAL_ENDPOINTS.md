@@ -1,5 +1,8 @@
 # Arsenal endpoints and `arsenal.env`
 
+This document refines the Arsenal boundary defined by
+[ZEMI architecture](docs/ZEMI_ARCHITECTURE.md).
+
 `[[arsenal.endpoints]]` is the first-class endpoint configuration. `name` is a
 stable ZEMI name, while `model` is the real provider model ID. Legacy
 `[[arsenal.llamas]]`, Model Mode and Router Mode remain supported and normalize

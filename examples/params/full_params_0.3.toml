@@ -86,9 +86,10 @@ schema_mode = { values = ["strict", "repair"], start = "strict" }
 temperature = { range = { min = 0.0, max = 0.4, step = 0.2 }, start = 0.0 }
 
 [playbooks.sampler]
-strategy = "coordinate"
+strategy = "block_coordinate"
 max_samples = 5
 seed = 23
+blocks = [["schema_mode", "temperature"]]
 
 [playbooks.sampler.sample_trial.dataset]
 adapter = "csv"

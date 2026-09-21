@@ -1,11 +1,17 @@
 # Dataset optimization
 
+This document refines the experimental layer defined by
+[ZEMI architecture](ZEMI_ARCHITECTURE.md).
+
 `ZemiComponent.run()` validates every enabled playbook's complete dataset and
 resolves its adapters before creating an Arsenal session. Each sampler proposal
 runs the playbook for every item, then evaluates the completed sample, observes
 the result, and proposes again. Coordinate strategies recompute neighborhoods
 around the best observed sample; ties retain the earlier sample. Search stops
 when that neighborhood has no unseen candidates or the sample limit is reached.
+`block_coordinate` uses explicit named blocks: it explores each block's
+Cartesian product around the current best sample, holds all other dimensions at
+that best sample, and treats every unlisted dimension as a singleton block.
 
 Dataset optimization runs only when the playbook explicitly sets
 `param_space_mode = "sampler"` and defines `[playbooks.sampler]`. Use

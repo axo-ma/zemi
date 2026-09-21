@@ -21,7 +21,7 @@ _SYSTEM_KEYS = {"version", "params"}
 _COMPONENT_KEYS = {"name", "stop_on_error", "params"}
 _ARSENAL_KEYS = {"id", "config_path", "lifecycle", "params"}
 _PLAYBOOK_KEYS = {"id", "path", "arsenal", "enabled", "param_space_mode", "params", "sampler"}
-_SAMPLER_KEYS = {"strategy", "max_samples", "seed", "block_size", "sample_trial"}
+_SAMPLER_KEYS = {"strategy", "max_samples", "seed", "blocks", "sample_trial"}
 _TRIAL_KEYS = {"dataset", "evaluator", "objective", "run"}
 _DATASET_KEYS = {"adapter", "path", "params"}
 _EVALUATOR_KEYS = {"adapter", "params"}
@@ -192,12 +192,11 @@ def _validate_sampler(raw: Any, label: str) -> dict[str, Any]:
         raise ValueError(f"{label}.max_samples is required for {strategy}")
     if "seed" in sampler and (not isinstance(sampler["seed"], int) or isinstance(sampler["seed"], bool)):
         raise ValueError(f"{label}.seed must be an integer")
-    block_size = sampler.get("block_size")
+    blocks = sampler.get("blocks")
     if strategy == "block_coordinate":
-        if not isinstance(block_size, int) or isinstance(block_size, bool) or block_size <= 0:
-            raise ValueError(f"{label}.block_size must be a positive integer")
-    elif block_size is not None:
-        raise ValueError(f"{label}.block_size is valid only for block_coordinate")
+        sampler["blocks"] = _validate_blocks_shape(blocks, f"{label}.blocks")
+    elif blocks is not None:
+        raise ValueError(f"{label}.blocks is valid only for block_coordinate")
     trial = _table(sampler.get("sample_trial"), f"{label}.sample_trial")
     _closed(trial, _TRIAL_KEYS, f"{label}.sample_trial")
     dataset = _table(trial.get("dataset"), f"{label}.sample_trial.dataset")
@@ -227,6 +226,59 @@ def _validate_sampler(raw: Any, label: str) -> dict[str, Any]:
         trial["run"] = adapter
     sampler["sample_trial"] = trial
     return sampler
+
+
+def _validate_blocks_shape(raw: Any, label: str) -> list[list[str]]:
+    if isinstance(raw, (str, bytes)) or not isinstance(raw, Sequence) or not raw:
+        raise ValueError(f"{label} must be a non-empty array of parameter-name arrays")
+    blocks: list[list[str]] = []
+    seen: set[str] = set()
+    for index, raw_block in enumerate(raw):
+        block_label = f"{label}[{index}]"
+        if isinstance(raw_block, (str, bytes)) or not isinstance(raw_block, Sequence) or not raw_block:
+            raise ValueError(f"{block_label} must be a non-empty array of parameter names")
+        block = []
+        for item_index, name in enumerate(raw_block):
+            if not isinstance(name, str) or not name:
+                raise ValueError(f"{block_label}[{item_index}] must be a non-empty parameter name")
+            if name in seen:
+                raise ValueError(f"{label}: parameter {name!r} occurs in more than one block")
+            seen.add(name)
+            block.append(name)
+        blocks.append(block)
+    return blocks
+
+
+def _coordinate_blocks(
+    space: "ParamSpace",
+    strategy: str,
+    blocks: Sequence[Sequence[str]] | None,
+    label: str = "sampler.blocks",
+) -> tuple[tuple["ParamDimension", ...], ...]:
+    dimensions = {dimension.name: dimension for dimension in space.dimensions}
+    if strategy == "coordinate":
+        if blocks is not None:
+            raise ValueError(f"{label} is valid only for block_coordinate")
+        return tuple((dimension,) for dimension in space.dimensions)
+    if strategy != "block_coordinate":
+        if blocks is not None:
+            raise ValueError(f"{label} is valid only for block_coordinate")
+        return ()
+    normalized = _validate_blocks_shape(blocks, label)
+    grouped: list[tuple[ParamDimension, ...]] = []
+    listed: set[str] = set()
+    for block in normalized:
+        resolved = []
+        for name in block:
+            if name in space.fixed:
+                raise ValueError(f"{label}: {name!r} is a fixed parameter, not a variable dimension")
+            if name not in dimensions:
+                raise ValueError(f"{label}: unknown variable dimension {name!r}")
+            listed.add(name)
+            resolved.append(dimensions[name])
+        grouped.append(tuple(resolved))
+    grouped.extend((dimension,) for dimension in space.dimensions if dimension.name not in listed)
+    return tuple(grouped)
 
 
 @dataclass(frozen=True)
@@ -317,12 +369,12 @@ class SampleTrialResult:
 class ParamSampler:
     """Deterministic proposal interface; optimizer state remains inside sampler."""
 
-    def __init__(self, space: ParamSpace, strategy: str = "grid", *, max_samples: int | None = None, seed: int | None = None, block_size: int | None = None, objective_metric: str = "objective", direction: str = "maximize") -> None:
+    def __init__(self, space: ParamSpace, strategy: str = "grid", *, max_samples: int | None = None, seed: int | None = None, blocks: Sequence[Sequence[str]] | None = None, objective_metric: str = "objective", direction: str = "maximize", _label: str = "sampler") -> None:
         if strategy not in _STRATEGIES: raise ValueError(f"unsupported sampler strategy: {strategy}")
         self.space = space; self.strategy = strategy; self.max_samples = max_samples
-        self.seed = seed; self.block_size = block_size; self.objective_metric = objective_metric; self.direction = direction
+        self.seed = seed; self.objective_metric = objective_metric; self.direction = direction
         if strategy != "grid" and (not isinstance(max_samples, int) or max_samples <= 0): raise ValueError(f"max_samples is required for {strategy}")
-        if strategy == "block_coordinate" and (not isinstance(block_size, int) or block_size <= 0): raise ValueError("block_size is required for block_coordinate")
+        self.blocks = _coordinate_blocks(space, strategy, blocks, f"{_label}.blocks")
         self._candidates = self._build_candidates()
 
     @property
@@ -337,10 +389,7 @@ class ParamSampler:
             tail = grid[1:]; random.Random(self.seed).shuffle(tail); candidates = [grid[0], *tail]
         else:
             start = self.space.start; candidates = [start]
-            size = 1 if self.strategy == "coordinate" else self.block_size or 1
-            dimensions = self.space.dimensions
-            for offset in range(0, len(dimensions), size):
-                block = dimensions[offset:offset + size]
+            for block in self.blocks:
                 domains = [dimension.values for dimension in block]
                 for values in itertools.product(*domains):
                     sample_values = copy.deepcopy(dict(start.values))
@@ -358,9 +407,7 @@ class ParamSampler:
                 return self.space.start
             best = PlaybookTrialResult(list(history)).best(self.objective_metric, self.direction)
             anchor = best.sample if best else self.space.start
-            size = 1 if self.strategy == "coordinate" else self.block_size
-            for offset in range(0, len(self.space.dimensions), size):
-                block = self.space.dimensions[offset:offset + size]
+            for block in self.blocks:
                 for values in itertools.product(*(d.values for d in block)):
                     candidate = copy.deepcopy(dict(anchor.values))
                     candidate.update((d.name, value) for d, value in zip(block, values))

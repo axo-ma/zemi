@@ -127,9 +127,10 @@ def _canonical_runtime(document: Mapping[str, Any]) -> dict[str, Any]:
                 sampler_config["strategy"],
                 max_samples=sampler_config.get("max_samples"),
                 seed=sampler_config.get("seed"),
-                block_size=sampler_config.get("block_size"),
+                blocks=sampler_config.get("blocks"),
                 objective_metric=objective["metric"],
                 direction=objective["direction"],
+                _label=f"playbooks.{playbook['id']}.sampler",
             )
             samples = [space.start]
         else:
@@ -776,7 +777,7 @@ class ZemiComponent:
                     config["_v03_samples"] = [values]
                     if config["_v03_sampler"]:
                         config["_v03_sampler"].update(strategy="grid", max_samples=1)
-                        config["_v03_sampler"].pop("block_size", None)
+                        config["_v03_sampler"].pop("blocks", None)
                     remaining.remove(identifier)
             if remaining:
                 raise ValueError(f"sample_overrides: unknown playbook ids {sorted(remaining)}")
@@ -943,10 +944,12 @@ class ZemiComponent:
         trial_config = config["sample_trial"]
         objective = trial_config["objective"]
         sampler = ParamSampler(ParamSpace.from_params(playbook.config["_v03_space"]), config["strategy"],
-                               max_samples=config.get("max_samples"), seed=config.get("seed"), block_size=config.get("block_size"),
-                               objective_metric=objective["metric"], direction=objective["direction"])
+                               max_samples=config.get("max_samples"), seed=config.get("seed"), blocks=config.get("blocks"),
+                               objective_metric=objective["metric"], direction=objective["direction"],
+                               _label=f"playbooks.{playbook.playbook_id}.sampler")
         parent = {"playbook_trial_id": playbook.playbook_id, "playbook_id": playbook.playbook_id,
                   "param_space_mode": playbook.param_space_mode,
+                  "sampler": {key: copy.deepcopy(config[key]) for key in ("strategy", "max_samples", "seed", "blocks") if key in config},
                   "started_at": _timestamp(), "finished_at": None, "status": "running", "samples": [],
                   "objective": objective, "ranking": [], "best_sample": None}
         self.report.data.setdefault("job_trial", {"job_trial_id": self.run_directory.name, "playbook_trials": []})["playbook_trials"].append(parent)
@@ -1256,6 +1259,7 @@ def _dataset_markdown(data):
     for trial in data.get("job_trial", {}).get("playbook_trials", []):
         lines.extend(("", f"## Dataset optimization: {_markdown_cell(trial['playbook_id'])}", "",
                       f"ParamSpace mode: `{trial.get('param_space_mode', 'sampler')}`", "",
+                      "Sampler:", "", "```json", _display_value(trial.get("sampler", {})), "```", "",
                       f"Best sample: `{trial['best_sample']}`", "",
                       "Ranking: " + ", ".join(trial["ranking"]), ""))
         for sample in trial["samples"]:

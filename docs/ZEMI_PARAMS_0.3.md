@@ -9,6 +9,9 @@ This document defines the configuration model and execution semantics for ZEMI
 Params 0.3. Keywords **MUST**, **MUST NOT**, **SHOULD**, and **MAY** are
 normative.
 
+The containing system boundaries are defined by
+[ZEMI architecture](ZEMI_ARCHITECTURE.md).
+
 ## 1. Goals and boundaries
 
 ZEMI Params 0.3 separates ZEMI-owned structure from user-owned values, makes
@@ -132,9 +135,10 @@ schema_mode = { values = ["strict", "repair"], start = "strict" }
 temperature = { range = { min = 0.0, max = 0.4, step = 0.2 }, start = 0.0 }
 
 [playbooks.sampler]
-strategy = "coordinate"
+strategy = "block_coordinate"
 max_samples = 5
 seed = 23
+blocks = [["schema_mode", "temperature"]]
 
 [playbooks.sampler.sample_trial.dataset]
 adapter = "csv"
@@ -222,7 +226,11 @@ not a request to run only the start sample.
   for `random`, `coordinate`, and `block_coordinate`; for `grid` omission means
   the complete finite Cartesian product.
 - `seed` (optional integer): reproducibility seed.
-- `block_size` (required positive integer only for `block_coordinate`).
+- `blocks` (required non-empty array only for `block_coordinate`): each item is
+  a non-empty array of unique variable-dimension names. Names MUST exist in the
+  resolved ParamSpace, MUST NOT name fixed parameters, and MUST NOT occur in
+  more than one block. Unlisted variable dimensions become singleton blocks in
+  declaration order.
 - `sample_trial` (required table): dataset, evaluator, and objective contract.
 
 An implementation MAY expose strategy-specific adapters, including one backed
@@ -366,8 +374,11 @@ Strategy minimum semantics:
   start sample is first.
 - `coordinate`: start sample first, then vary one dimension at a time around the
   best observed sample; ties keep the earlier sample.
-- `block_coordinate`: as coordinate, but varies consecutive declaration-order
-  blocks of at most `block_size` dimensions.
+- `block_coordinate`: start sample first, then visit the configured named blocks
+  in order. For one block it proposes the Cartesian product of that block's
+  domains around the current best sample while every dimension outside the block
+  remains fixed at its current-best value. Unlisted dimensions are visited as
+  singleton blocks after the explicit blocks, in declaration order.
 
 The sampler owns any optimizer state. A trial stops when the finite grid is
 exhausted, `max_samples` is reached, or the sampler reports exhaustion. Objective
@@ -387,6 +398,8 @@ id. Besides the field rules above, ZEMI MUST reject:
 - missing parent Arsenal references;
 - absolute filesystem paths in configuration;
 - unsupported strategy, direction, adapter shape, or parameter wrapper;
+- malformed sampler blocks, unknown or fixed block members, or a dimension
+  repeated across blocks;
 - a variable ParamSpace without `param_space_mode`;
 - `param_space_mode = "sampler"` without `sampler`, `sampler` without that
   mode, and `sampler` combined with `param_space_mode = "start_only"`;
