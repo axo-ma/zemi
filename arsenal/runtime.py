@@ -603,7 +603,7 @@ class ArsenalSession:
     def _load_router_model(llama: Llama, model: Model) -> None:
         request = Request(
             f"http://{llama.host}:{llama.port}/models/load",
-            data=json.dumps({"model": model.alias}).encode("utf-8"),
+            data=json.dumps({"model": model.alias}, ensure_ascii=False).encode("utf-8"),
             headers={"Content-Type": "application/json"},
             method="POST",
         )

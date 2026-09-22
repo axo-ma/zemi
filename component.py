@@ -1,9 +1,10 @@
-"""Parameterized execution and reporting for ZEMI Component playbooks."""
+"""Parameterized execution and reporting for ZEMI Component modules."""
 
 from __future__ import annotations
 
 import copy
 import html
+import inspect
 import itertools
 import json
 import os
@@ -23,13 +24,13 @@ from .params import ParamSample, ParamSpace, PlaybookOptimizer, validate_documen
 
 
 def _canonical_runtime(document: Mapping[str, Any]) -> dict[str, Any]:
-    """Resolve a Params 0.5 document and adapt it to the established runner."""
+    """Resolve a Params 0.6 document and adapt it to the established runner."""
     canonical = validate_document(document)
     reference_document: dict[str, Any] = {
         "system": canonical["system"],
         "component": canonical["component"],
         "arsenals": {item["id"]: item for item in canonical["arsenals"]},
-        "playbooks": {item["id"]: item for item in canonical["playbooks"]},
+        "modules": {item["id"]: item for item in canonical["modules"]},
     }
 
     def validate_refs(value: Any, label: str) -> None:
@@ -39,7 +40,7 @@ def _canonical_runtime(document: Mapping[str, Any]) -> dict[str, Any]:
                 parts = path.split(".") if isinstance(path, str) else []
                 allowed = (
                     parts[:2] in (["system", "params"], ["component", "params"])
-                    or len(parts) >= 3 and parts[0] in {"arsenals", "playbooks"} and parts[2] == "params"
+                    or len(parts) >= 3 and parts[0] in {"arsenals", "modules"} and parts[2] == "params"
                 )
                 if not allowed:
                     raise ValueError(f"{label}: refs may target only params sections, got {path!r}")
@@ -53,7 +54,7 @@ def _canonical_runtime(document: Mapping[str, Any]) -> dict[str, Any]:
         raw, origins = _ParamReferenceResolver(reference_document).resolve_table(table, label)
         variants = _resolve_playbook_params(raw, label, owner, origins)
         if len(variants) != 1:
-            raise ValueError(f"{label} must not use legacy each wrappers in Params 0.5")
+            raise ValueError(f"{label} must not use legacy each wrappers in Params 0.6")
         return variants[0][0]
 
     system_params = resolved_params(canonical["system"]["params"], "system.params", "system")
@@ -73,29 +74,36 @@ def _canonical_runtime(document: Mapping[str, Any]) -> dict[str, Any]:
             "arsenal_start_and_stop_at_job_level": arsenal["lifecycle"] == "job",
             "playbooks_params": [],
         }
-    for playbook in canonical["playbooks"]:
-        label = f"playbooks.{playbook['id']}.params"
+    for playbook in canonical["modules"]:
+        label = f"modules.{playbook['id']}.params"
         playbook_params = resolved_params(playbook["params"], label, playbook["id"])
-        reference_document["playbooks"][playbook["id"]]["params"] = playbook_params
+        reference_document["modules"][playbook["id"]]["params"] = playbook_params
         candidate_space = ParamSpace(config=playbook_params, label=label)
         space = candidate_space if candidate_space.dimensions else None
         optimizer_config = playbook.get("optimizer")
+        if optimizer_config is not None and isinstance(optimizer_config.get("mode"), Mapping):
+            selected, _ = _resolve_playbook_params(
+                {"mode": optimizer_config["mode"]},
+                f"modules.{playbook['id']}.optimizer",
+                playbook["id"],
+            )[0]
+            optimizer_config["mode"] = selected["mode"]
         if space is None:
             if optimizer_config is not None:
-                raise ValueError(f"playbooks.{playbook['id']}.optimizer is not allowed because its params are all fixed")
+                raise ValueError(f"modules.{playbook['id']}.optimizer is not allowed because its params are all fixed")
             samples = [copy.deepcopy(playbook_params)]
         else:
             names = ", ".join(dimension.name for dimension in space.dimensions)
             if optimizer_config is None:
                 raise ValueError(
-                    f"playbooks.{playbook['id']}.optimizer is required because its params "
+                    f"modules.{playbook['id']}.optimizer is required because its params "
                     f"define variable dimensions: {names}"
                 )
             samples = [space.start]
             trial_config = optimizer_config["sample_trial"]
             trial_config["params"] = resolved_params(
                 trial_config["params"],
-                f"playbooks.{playbook['id']}.optimizer.sample_trial.params",
+                f"modules.{playbook['id']}.optimizer.sample_trial.params",
                 playbook["id"],
             )
             PlaybookOptimizer(config=optimizer_config, param_space=space)
@@ -111,6 +119,8 @@ def _canonical_runtime(document: Mapping[str, Any]) -> dict[str, Any]:
         groups[arsenal_id]["playbooks_params"].append({
             "playbook_name": playbook["path"].removeprefix("@comp/"),
             "playbook_id": playbook["id"],
+            "module_id": playbook["id"],
+            "module_kind": playbook["kind"],
             "enabled": playbook.get("enabled", True),
             "playbook_params": playbook_params,
             "_v05_samples": [
@@ -134,7 +144,7 @@ def _canonical_runtime(document: Mapping[str, Any]) -> dict[str, Any]:
             **component_params,
         },
         "arsenals": list(groups.values()),
-        "_params_05": canonical,
+        "_params_06": canonical,
     }
 
 
@@ -592,12 +602,24 @@ class ComponentReport:
             os.replace(output_tmp, output_path)
 
 
-class Playbook:
-    """One expanded notebook trial executable through Papermill."""
+class Module:
+    """Base contract for one executable unit owned by a Component."""
+
+    kind: str
+
+    def run(self) -> None:
+        raise NotImplementedError
+
+
+class Playbook(Module):
+    """A ``kind = 'playbook'`` Module executed through Papermill."""
+
+    kind = "playbook"
 
     def __init__(self, component: "ZemiComponent", config: Mapping[str, Any], *, config_index: int = 0, trial_index: int = 0, params: Mapping[str, Any] | None = None, resolved_params: Mapping[str, Any] | None = None) -> None:
         self.component = component; self.config = copy.deepcopy(dict(config))
         self.playbook_name = _playbook_name(config, config_index)
+        self.module_id = config.get("module_id", config.get("playbook_id"))
         self.enabled = config.get("enabled", True)
         if not isinstance(self.enabled, bool):
             raise ValueError(f"enabled must be boolean for {self.playbook_name!r}")
@@ -770,8 +792,9 @@ class ZemiComponent:
         self.root = env.path.comp.root; self.params_path = _select_params_path(self.root, params_file)
         with self.params_path.open("rb") as file:
             self.params = tomllib.load(file)
-        self.params_05 = "system" in self.params
-        if self.params_05:
+        self.params_06 = "system" in self.params
+        self.params_05 = self.params_06
+        if self.params_06:
             self.params = _canonical_runtime(self.params)
             remaining = set(sample_overrides or {})
             for group in self.params["arsenals"]:
@@ -794,16 +817,16 @@ class ZemiComponent:
                     config["_v05_space"] = values
                     config["_v05_samples"] = [values]
                     if config["_v05_optimizer"]:
-                        config["_v05_optimizer"].update(strategy="grid", max_samples=1)
+                        config["_v05_optimizer"].update(strategy="grid", max_trials=1)
                         config["_v05_optimizer"].pop("blocks", None)
                     remaining.remove(identifier)
             if remaining:
                 raise ValueError(f"sample_overrides: unknown playbook ids {sorted(remaining)}")
         else:
             if sample_overrides:
-                raise ValueError("sample_overrides requires Params 0.5")
+                raise ValueError("sample_overrides requires Params 0.6")
             warnings.warn(
-                "Legacy ZEMI parameter schema is deprecated; migrate to Params 0.5",
+                "Legacy ZEMI parameter schema is deprecated; migrate to Params 0.6",
                 DeprecationWarning,
                 stacklevel=2,
             )
@@ -929,7 +952,9 @@ class ZemiComponent:
                     playbooks.append(playbook); group_playbooks.append(playbook)
                 config_index += 1
             self._arsenal_groups.append((managed, arsenal_config_path, tuple(group_playbooks)))
-        self.playbooks = tuple(playbooks); self._closed = False; self.report.save()
+        self.modules = tuple(playbooks)
+        self.playbooks = self.modules  # compatibility alias
+        self._closed = False; self.report.save()
 
     def _prepare_sample_trials(self):
         from .sample_trial import resolve_sample_trial
@@ -956,7 +981,7 @@ class ZemiComponent:
                     ids.add(key)
                 prepared[playbook.playbook_id] = (items, sample_trial)
             except Exception as error:
-                raise ValueError(f"playbooks.{playbook.playbook_id}.optimizer.sample_trial: {error}") from error
+                raise ValueError(f"modules.{playbook.playbook_id}.optimizer.sample_trial: {error}") from error
         return prepared
 
     @staticmethod
@@ -978,7 +1003,7 @@ class ZemiComponent:
         parent = {"playbook_trial_id": playbook.playbook_id, "playbook_id": playbook.playbook_id,
                   "arsenal": playbook.arsenal_id,
                   "report_markdown": f"sample_trials/{playbook.playbook_id}.report.md",
-                  "optimizer": {key: copy.deepcopy(config[key]) for key in ("strategy", "max_samples", "seed", "blocks") if key in config},
+                  "optimizer": {key: copy.deepcopy(config[key]) for key in ("mode", "strategy", "max_trials", "seed", "blocks") if key in config},
                   "started_at": _timestamp(), "finished_at": None, "status": "running", "samples": [],
                   "ranking": [], "best_sample": None}
         self.report.data.setdefault("job_trial", {"job_trial_id": self.run_directory.name, "playbook_trials": []})["playbook_trials"].append(parent)
@@ -1050,7 +1075,9 @@ class ZemiComponent:
             best = optimizer.best_param_sample(history)
             self.report.set_sample_trial_markdown(
                 playbook.playbook_id,
-                sample_trial.render_report(history, parent["optimizer"], best),
+                (sample_trial.render_report(history, best)
+                 if len(inspect.signature(sample_trial.render_report).parameters) == 2
+                 else sample_trial.render_report(history, parent["optimizer"], best)),
             )
             self.report.save()
 
@@ -1061,8 +1088,25 @@ class ZemiComponent:
                 started = _timestamp()
                 runs = []
                 try:
-                    runs = sample_trial.run(playbook=playbook, sample=sample, dataset=items)
-                    evaluated = sample_trial.evaluate(runs=runs)
+                    run_parameters = inspect.signature(sample_trial.run).parameters
+                    if "module" in run_parameters:
+                        runs = sample_trial.run(module=playbook, param_sample=sample, dataset=items)
+                    else:
+                        warnings.warn(
+                            "SampleTrial.run(playbook, sample, dataset) is deprecated; use module and param_sample",
+                            DeprecationWarning,
+                            stacklevel=2,
+                        )
+                        runs = sample_trial.run(playbook=playbook, sample=sample, dataset=items)
+                    if "dataset" in inspect.signature(sample_trial.evaluate).parameters:
+                        evaluated = sample_trial.evaluate(runs=runs, dataset=items)
+                    else:
+                        warnings.warn(
+                            "SampleTrial.evaluate(runs) is deprecated; accept evaluate(runs, dataset)",
+                            DeprecationWarning,
+                            stacklevel=2,
+                        )
+                        evaluated = sample_trial.evaluate(runs=runs)
                     if not isinstance(evaluated, tuple) or len(evaluated) != 3:
                         raise ValueError("SampleTrial.evaluate(runs) must return (metrics, score, feedback)")
                     metrics, score, feedback = evaluated
@@ -1073,6 +1117,8 @@ class ZemiComponent:
                                                error=str(error), started_at=started, finished_at=_timestamp())
                 history.append(trial)
                 save_sample(trial)
+                if config.get("mode", "optimize") == "start_only":
+                    break
             parent["status"] = "failed" if any(s.error for s in history) else "succeeded"
             if parent["status"] == "failed":
                 raise ValueError(f"PlaybookTrial {playbook.playbook_id}: SampleTrial failed; see report")
@@ -1369,4 +1415,4 @@ def _error_data(error: BaseException) -> dict[str, str]:
     return {"type": type(error).__name__, "message": str(error)}
 
 
-__all__ = ["ComponentReport", "Playbook", "ZemiComponent"]
+__all__ = ["ComponentReport", "Module", "Playbook", "ZemiComponent"]

@@ -1,4 +1,4 @@
-"""ZEMI Params 0.5 schema, parameter spaces, optimizers, and trial loop."""
+"""ZEMI Params 0.6 schema, parameter spaces, optimizers, and trial loop."""
 
 from __future__ import annotations
 
@@ -17,12 +17,12 @@ from typing import Any
 
 
 _ID = re.compile(r"[A-Za-z][A-Za-z0-9_-]*\Z")
-_TOP_KEYS = {"system", "component", "arsenals", "playbooks"}
+_TOP_KEYS = {"system", "component", "arsenals", "modules"}
 _SYSTEM_KEYS = {"version", "params"}
 _COMPONENT_KEYS = {"name", "stop_on_error", "params"}
 _ARSENAL_KEYS = {"id", "config_path", "lifecycle", "params"}
-_PLAYBOOK_KEYS = {"id", "path", "arsenal", "enabled", "params", "optimizer"}
-_OPTIMIZER_KEYS = {"strategy", "max_samples", "seed", "blocks", "sample_trial"}
+_MODULE_KEYS = {"id", "kind", "path", "arsenal", "enabled", "params", "optimizer"}
+_OPTIMIZER_KEYS = {"mode", "strategy", "max_trials", "max_samples", "seed", "blocks", "sample_trial"}
 _TRIAL_KEYS = {"type", "dataset", "params"}
 _LEGACY_TRIAL_KEYS = {"dataset", "evaluator", "objective", "run"}
 _DATASET_KEYS = {"adapter", "path", "params"}
@@ -74,17 +74,20 @@ def _params(value: Any, label: str) -> dict[str, Any]:
 
 
 def validate_document(document: Mapping[str, Any]) -> dict[str, Any]:
-    """Validate and deep-copy one canonical Params 0.5 document."""
+    """Validate and deep-copy one canonical Params 0.6 document."""
     doc = _table(document, "document")
     version = doc.get("system", {}).get("version") if isinstance(doc.get("system"), Mapping) else None
     if version == "0.3":
         doc = _migrate_03(doc)
-        warnings.warn("Params 0.3 is deprecated; migrated in memory to Params 0.5", DeprecationWarning, stacklevel=2)
+        warnings.warn("Params 0.3 is deprecated; migrated in memory to Params 0.6", DeprecationWarning, stacklevel=2)
+    elif version == "0.5":
+        doc = _migrate_05(doc)
+        warnings.warn("Params 0.5 [[playbooks]] is deprecated; migrated in memory to Params 0.6 [[modules]]", DeprecationWarning, stacklevel=2)
     _closed(doc, _TOP_KEYS, "document")
     system = _table(doc.get("system"), "system")
     _closed(system, _SYSTEM_KEYS, "system")
-    if system.get("version") != "0.5":
-        raise ValueError('system.version is required and must be exactly "0.5"')
+    if system.get("version") != "0.6":
+        raise ValueError('system.version is required and must be exactly "0.6"')
     system["params"] = _params(system.get("params", {}), "system.params")
 
     component = _table(doc.get("component"), "component")
@@ -117,18 +120,21 @@ def validate_document(document: Mapping[str, Any]) -> dict[str, Any]:
         item["params"] = _params(item.get("params", {}), f"{label}.params")
         normalized_arsenals.append(item)
 
-    playbooks = doc.get("playbooks")
-    if not isinstance(playbooks, list) or not playbooks:
-        raise ValueError("playbooks must be a non-empty array of tables")
-    playbook_ids: set[str] = set()
-    normalized_playbooks = []
-    for index, raw in enumerate(playbooks):
-        label = f"playbooks[{index}]"
-        item = _table(raw, label); _closed(item, _PLAYBOOK_KEYS, label)
+    modules = doc.get("modules")
+    if not isinstance(modules, list) or not modules:
+        raise ValueError("modules must be a non-empty array of tables")
+    module_ids: set[str] = set()
+    normalized_modules = []
+    for index, raw in enumerate(modules):
+        label = f"modules[{index}]"
+        item = _table(raw, label); _closed(item, _MODULE_KEYS, label)
         item_id = _identifier(item.get("id"), f"{label}.id")
-        if item_id in playbook_ids:
-            raise ValueError(f"duplicate playbook id: {item_id!r}")
-        playbook_ids.add(item_id)
+        if item_id in module_ids:
+            raise ValueError(f"duplicate Module id: {item_id!r}")
+        module_ids.add(item_id)
+        kind = item.get("kind")
+        if kind != "playbook":
+            raise ValueError(f"{label}.kind is required and currently only 'playbook' is supported")
         _path(item.get("path"), f"{label}.path")
         parent = item.get("arsenal")
         if parent is not None:
@@ -154,20 +160,30 @@ def validate_document(document: Mapping[str, Any]) -> dict[str, Any]:
         elif not _may_resolve_dimensions(item["params"]):
             if "optimizer" in item:
                 raise ValueError(f"{label}.optimizer is not allowed because {label}.params are all fixed")
-        normalized_playbooks.append(item)
-    return {"system": system, "component": component, "arsenals": normalized_arsenals, "playbooks": normalized_playbooks}
+        normalized_modules.append(item)
+    return {"system": system, "component": component, "arsenals": normalized_arsenals, "modules": normalized_modules}
 
 
 def _validate_optimizer(raw: Any, label: str) -> dict[str, Any]:
     optimizer = _table(raw, label); _closed(optimizer, _OPTIMIZER_KEYS, label)
+    mode = optimizer.get("mode", "optimize")
+    if not ((isinstance(mode, str) and mode in {"optimize", "start_only"})
+            or (isinstance(mode, Mapping) and set(mode) == {"select"})):
+        raise ValueError(f"{label}.mode must be optimize, start_only, or a select wrapper")
+    optimizer["mode"] = copy.deepcopy(mode)
     strategy = optimizer.get("strategy")
     if strategy not in _STRATEGIES:
         raise ValueError(f"{label}.strategy must be grid, random, coordinate, or block_coordinate")
-    maximum = optimizer.get("max_samples")
+    if "max_trials" in optimizer and "max_samples" in optimizer:
+        raise ValueError(f"{label} must not define both max_trials and deprecated max_samples")
+    maximum = optimizer.get("max_trials", optimizer.get("max_samples"))
     if maximum is not None and (not isinstance(maximum, int) or isinstance(maximum, bool) or maximum <= 0):
-        raise ValueError(f"{label}.max_samples must be a positive integer")
+        raise ValueError(f"{label}.max_trials must be a positive integer")
     if strategy != "grid" and maximum is None:
-        raise ValueError(f"{label}.max_samples is required for {strategy}")
+        raise ValueError(f"{label}.max_trials is required for {strategy}")
+    if "max_samples" in optimizer:
+        warnings.warn("optimizer.max_samples is deprecated; use max_trials", DeprecationWarning, stacklevel=3)
+        optimizer["max_trials"] = optimizer.pop("max_samples")
     if "seed" in optimizer and (not isinstance(optimizer["seed"], int) or isinstance(optimizer["seed"], bool)):
         raise ValueError(f"{label}.seed must be an integer")
     blocks = optimizer.get("blocks")
@@ -192,9 +208,9 @@ def _validate_optimizer(raw: Any, label: str) -> dict[str, Any]:
 
 
 def _migrate_03(doc: dict[str, Any]) -> dict[str, Any]:
-    """Translate the final 0.3 surface to 0.5 without keeping it canonical."""
+    """Translate the final 0.3 surface to 0.6 without keeping it canonical."""
     migrated = copy.deepcopy(doc)
-    migrated["system"]["version"] = "0.5"
+    migrated["system"]["version"] = "0.6"
     for playbook in migrated.get("playbooks", []):
         mode = playbook.pop("param_space_mode", None)
         sampler = playbook.pop("sampler", None)
@@ -223,6 +239,18 @@ def _migrate_03(doc: dict[str, Any]) -> dict[str, Any]:
                 "params": copy.deepcopy(old_trial.get("params", {})),
             }
         playbook["optimizer"] = optimizer
+    migrated["modules"] = migrated.pop("playbooks", [])
+    for module in migrated["modules"]:
+        module["kind"] = "playbook"
+    return migrated
+
+
+def _migrate_05(doc: dict[str, Any]) -> dict[str, Any]:
+    migrated = copy.deepcopy(doc)
+    migrated["system"]["version"] = "0.6"
+    migrated["modules"] = migrated.pop("playbooks", [])
+    for module in migrated["modules"]:
+        module["kind"] = "playbook"
     return migrated
 
 
@@ -309,7 +337,7 @@ class ParamSpace:
     fixed: Mapping[str, Any]
     dimensions: tuple[ParamDimension, ...]
 
-    def __init__(self, config: Mapping[str, Any], label: str = "playbook.params") -> None:
+    def __init__(self, config: Mapping[str, Any], label: str = "module.params") -> None:
         fixed: dict[str, Any] = {}; dimensions = []
         for name, value in config.items():
             if isinstance(value, Mapping) and ("values" in value or "range" in value):
@@ -320,7 +348,7 @@ class ParamSpace:
         object.__setattr__(self, "dimensions", tuple(dimensions))
 
     @classmethod
-    def from_params(cls, params: Mapping[str, Any], label: str = "playbook.params") -> "ParamSpace":
+    def from_params(cls, params: Mapping[str, Any], label: str = "module.params") -> "ParamSpace":
         warnings.warn("ParamSpace.from_params() is deprecated; use ParamSpace(config=...)", DeprecationWarning, stacklevel=2)
         return cls(config=params, label=label)
 
@@ -395,7 +423,7 @@ class PlaybookOptimizer:
         if unknown:
             raise ValueError(f"optimizer contains unsupported structural keys: {', '.join(sorted(unknown))}")
         strategy = config.get("strategy", "grid")
-        max_samples = config.get("max_samples")
+        max_samples = config.get("max_trials", config.get("max_samples"))
         seed = config.get("seed")
         blocks = config.get("blocks")
         if strategy not in _STRATEGIES: raise ValueError(f"unsupported optimizer strategy: {strategy}")

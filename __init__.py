@@ -4,11 +4,12 @@ from . import arsenal, env, params, playbook, toml
 from .params import ParamSample, ParamSampler, ParamSpace, PlaybookOptimizer
 from .sample_trial import SampleTrial, TableDetectionSampleTrial
 from .inputs import InputStore
-from .component import ComponentReport, Playbook, ZemiComponent
+from .component import ComponentReport, Module, Playbook, ZemiComponent
 from .playbook import output_dir, output_params, output_path
 
 __all__ = [
     "ComponentReport",
+    "Module",
     "Playbook",
     "ZemiComponent",
     "arsenal",

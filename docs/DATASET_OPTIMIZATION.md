@@ -10,9 +10,9 @@ Coordinate strategies recompute neighborhoods around the highest-score sample;
 ties retain the earlier sample. `block_coordinate` varies declared blocks
 jointly and treats unlisted dimensions as singleton blocks.
 
-Optimization occurs for every variable ParamSpace and only then. Fixed-only
-Playbooks execute once without a SampleTrial. See
-[Params 0.5](ZEMI_PARAMS_0.5.md).
+Variable Module ParamSpaces use `mode = "optimize"` for the full loop or
+`mode = "start_only"` for one complete start-sample trial. Fixed Modules execute
+once without a SampleTrial. See [Params 0.6](ZEMI_PARAMS_0.6.md).
 
 ## SampleTrial contract
 
@@ -25,8 +25,8 @@ sample_trial = SampleTrial(config)
 dataset = sample_trial.load_dataset()
 
 while param_sample := optimizer.next_param_sample(history):
-    runs = sample_trial.run(playbook=playbook, sample=param_sample, dataset=dataset)
-    metrics, score, feedback = sample_trial.evaluate(runs=runs)
+    runs = sample_trial.run(module=module, param_sample=param_sample, dataset=dataset)
+    metrics, score, feedback = sample_trial.evaluate(runs=runs, dataset=dataset)
     history.append(sample_trial.result(
         param_sample=param_sample,
         runs=runs,
@@ -36,12 +36,20 @@ while param_sample := optimizer.next_param_sample(history):
     ))
 
 best = optimizer.best_param_sample(history)
+report = sample_trial.render_report(history, best)
 ```
 
 Score alone drives descending ranking. Metrics remain complete diagnostics.
 Feedback is optional JSON-compatible domain data.
 
-## Table dataset v1
+## DatasetItem and table dataset v1
+
+A DatasetItem has an `id`, Module-facing `input`, and evaluator-facing
+`reference`. For example:
+
+```json
+{"id":"sheet-1","input":{"worksheet_name":"Данные"},"reference":["A1:B2"]}
+```
 
 The built-in `TableDetectionSampleTrial` uses one reviewed JSON file per split.
 It verifies policy and workbook files, SHA-256 hashes, worksheet links and

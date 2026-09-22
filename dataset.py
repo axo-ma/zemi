@@ -8,8 +8,17 @@ import json
 import re
 from collections import Counter, defaultdict
 from pathlib import Path, PureWindowsPath
+from typing import Any, TypedDict
 
 from . import env
+
+
+class DatasetItem(TypedDict):
+    """One evaluation example: Module input plus evaluator-only reference data."""
+
+    id: str | int
+    input: dict[str, Any]
+    reference: Any
 
 
 def zemi_path(value):
@@ -117,7 +126,7 @@ def table_dataset(*, path, params):
                     raise ValueError(f"worksheets[{key}].name: {sheet['name']!r} not found in {filename}")
                 items.append({"id": key, "workbook_id": book_id,
                               "input": {"workbook_path": str(filename), "worksheet_name": sheet["name"]},
-                              "ground_truth": gt[key], "tags": sheet.get("tags", []), "status": "reviewed"})
+                              "reference": gt[key], "tags": sheet.get("tags", []), "status": "reviewed"})
         finally:
             workbook.close()
     return items
@@ -138,7 +147,7 @@ def table_evaluator(trial, *, params):
     errors = empty = empty_correct = 0
     for run in trial.runs:
         item = run["item"]
-        truth = Counter(item["ground_truth"])
+        truth = Counter(item["reference"])
         execution_error = run.get("error")
         diagnostic = None
         prediction = run.get("prediction")
@@ -167,7 +176,7 @@ def table_evaluator(trial, *, params):
             for tag in set(item.get("tags", [])):
                 tags[tag][i] += value
         details.append({"item_id": item["id"], "input": item["input"], "tags": item.get("tags", []),
-                        "ground_truth": item["ground_truth"], "prediction": prediction,
+                        "reference": item["reference"], "prediction": prediction,
                         "error": diagnostic, "execution_status": run.get("status"),
                         "evaluation_status": run.get("evaluation_status"), **_scores(tp, fp, fn)})
     return {**_scores(*total), "items": len(details), "errors": errors,

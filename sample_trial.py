@@ -29,14 +29,17 @@ class SampleTrial:
     def load_dataset(self) -> list[Any]:
         raise NotImplementedError
 
-    def run(self, *, playbook: Any, sample: ParamSample, dataset: Sequence[Any]) -> list[dict[str, Any]]:
+    def run(self, *, module: Any = None, playbook: Any = None, param_sample: ParamSample | None = None,
+            sample: ParamSample | None = None, dataset: Sequence[Any]) -> list[dict[str, Any]]:
+        module = module or playbook
+        param_sample = param_sample or sample
         context = RunContext()
         try:
-            return [self.execute(playbook=playbook, sample=sample, item=item, context=context) for item in dataset]
+            return [self.execute(playbook=module, sample=param_sample, item=item, context=context) for item in dataset]
         finally:
             context.close()
 
-    def evaluate(self, *, runs: Sequence[dict[str, Any]]) -> tuple[Mapping[str, Any], float, Any]:
+    def evaluate(self, *, runs: Sequence[dict[str, Any]], dataset: Sequence[Any]) -> tuple[Mapping[str, Any], float, Any]:
         raise NotImplementedError
 
     def result(self, *, param_sample: ParamSample, runs: Sequence[dict[str, Any]], score: Any,
@@ -68,8 +71,7 @@ class SampleTrial:
             status="failed" if error else "succeeded", artifacts=artifacts,
         )
 
-    def render_report(self, history: Sequence[SampleTrialResult], optimizer_config: Mapping[str, Any],
-                      best_sample: ParamSample | None) -> str:
+    def render_report(self, history: Sequence[SampleTrialResult], best_param_sample: ParamSample | None) -> str:
         return ""
 
 
@@ -79,12 +81,11 @@ class TableDetectionSampleTrial(SampleTrial):
     def load_dataset(self) -> list[Any]:
         return list(table_dataset(path=self.dataset, params=self.params))
 
-    def evaluate(self, *, runs: Sequence[dict[str, Any]]) -> tuple[Mapping[str, Any], float, Any]:
+    def evaluate(self, *, runs: Sequence[dict[str, Any]], dataset: Sequence[Any]) -> tuple[Mapping[str, Any], float, Any]:
         metrics, feedback = table_evaluator(SimpleNamespace(runs=runs), params=self.params)
         return metrics, metrics["f1"], feedback
 
-    def render_report(self, history: Sequence[SampleTrialResult], optimizer_config: Mapping[str, Any],
-                      best_sample: ParamSample | None) -> str:
+    def render_report(self, history: Sequence[SampleTrialResult], best_param_sample: ParamSample | None) -> str:
         lines = ["### Table detection", ""]
         for ordinal, result in enumerate(history, 1):
             lines.extend((f"#### Sample {ordinal}", "",
@@ -92,7 +93,7 @@ class TableDetectionSampleTrial(SampleTrial):
                           "|---|---|---|---:|---:|---:|---:|---:|---:|---|"))
             details = result.feedback.get("items", []) if isinstance(result.feedback, Mapping) else []
             for item in details:
-                values = [item.get("input"), item.get("ground_truth"), item.get("prediction"),
+                values = [item.get("input"), item.get("reference"), item.get("prediction"),
                           *[item.get(key) for key in ("tp", "fp", "fn", "precision", "recall", "f1")],
                           item.get("error")]
                 cells = [json.dumps(value, ensure_ascii=False, sort_keys=True).replace("|", "\\|") for value in values]
@@ -129,7 +130,7 @@ class LegacySampleTrial(SampleTrial):
         finally:
             context.close()
 
-    def evaluate(self, *, runs: Sequence[dict[str, Any]]) -> tuple[Mapping[str, Any], float, Any]:
+    def evaluate(self, *, runs: Sequence[dict[str, Any]], dataset: Sequence[Any]) -> tuple[Mapping[str, Any], float, Any]:
         evaluated = self.evaluator(SimpleNamespace(runs=runs), params=self.evaluator_config.get("params", {}))
         metrics, feedback = evaluated if isinstance(evaluated, tuple) else (evaluated, None)
         metric = self.objective["metric"]
