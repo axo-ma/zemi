@@ -9,7 +9,7 @@ from types import SimpleNamespace
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
-from .dataset import RunContext, resolve_adapter, table_dataset, table_evaluator, zemi_path
+from .dataset import RunContext, TrialDataset, resolve_adapter, table_dataset, table_evaluator, zemi_path
 from .params import ParamSample, SampleTrialResult
 
 
@@ -26,16 +26,17 @@ class SampleTrial:
         self.dataset = self.config.get("dataset")
         self.execute = execute
 
-    def load_dataset(self) -> list[Any]:
-        raise NotImplementedError
+    def load_dataset(self) -> TrialDataset:
+        return TrialDataset.load(self.dataset)
 
     def run(self, *, module: Any = None, playbook: Any = None, param_sample: ParamSample | None = None,
-            sample: ParamSample | None = None, dataset: Sequence[Any]) -> list[dict[str, Any]]:
+            sample: ParamSample | None = None, dataset: TrialDataset | Sequence[Any]) -> list[dict[str, Any]]:
         module = module or playbook
         param_sample = param_sample or sample
         context = RunContext()
         try:
-            return [self.execute(playbook=module, sample=param_sample, item=item, context=context) for item in dataset]
+            items = dataset.items if isinstance(dataset, TrialDataset) else dataset
+            return [self.execute(playbook=module, sample=param_sample, item=item, context=context) for item in items]
         finally:
             context.close()
 
@@ -44,7 +45,7 @@ class SampleTrial:
 
     def result(self, *, param_sample: ParamSample, runs: Sequence[dict[str, Any]], score: Any,
                metrics: Mapping[str, Any], feedback: Any = None, error: str | None = None,
-               started_at: str | None = None, finished_at: str | None = None) -> SampleTrialResult:
+               started_at: str | None = None, finished_at: str | None = None, report: str | None = None) -> SampleTrialResult:
         if error is None:
             if isinstance(score, bool) or not isinstance(score, (int, float)) or not math.isfinite(score):
                 raise ValueError("SampleTrial score must be one finite number")
@@ -68,37 +69,37 @@ class SampleTrial:
             sample=param_sample, runs=list(runs), metrics=normalized, feedback=feedback,
             error=error, started_at=started_at or _timestamp(),
             finished_at=finished_at or _timestamp(), score=float(score) if score is not None else None,
-            status="failed" if error else "succeeded", artifacts=artifacts,
+            status="failed" if error else "succeeded", artifacts=artifacts, report=report,
         )
 
-    def render_report(self, history: Sequence[SampleTrialResult], best_param_sample: ParamSample | None) -> str:
-        return ""
+    def render_report(self, *, param_sample, runs, metrics, score, feedback) -> str:
+        return "\n".join(("# Sample Trial Report", "", "## Param Sample", "", "```json",
+            json.dumps(param_sample.values, ensure_ascii=False, indent=2), "```", "", f"Score: `{score}`", "",
+            "## Metrics", "", "```json", json.dumps(metrics, ensure_ascii=False, indent=2), "```", "",
+            "## Runs and feedback", "", "```json", json.dumps({"runs": runs, "feedback": feedback}, ensure_ascii=False, indent=2), "```", ""))
 
 
 class TableDetectionSampleTrial(SampleTrial):
     """Built-in exact table-boundary SampleTrial; score defaults to aggregate F1."""
 
-    def load_dataset(self) -> list[Any]:
-        return list(table_dataset(path=self.dataset, params=self.params))
+    def load_dataset(self) -> TrialDataset:
+        return TrialDataset.load(self.dataset)
 
     def evaluate(self, *, runs: Sequence[dict[str, Any]], dataset: Sequence[Any]) -> tuple[Mapping[str, Any], float, Any]:
         metrics, feedback = table_evaluator(SimpleNamespace(runs=runs), params=self.params)
         return metrics, metrics["f1"], feedback
 
-    def render_report(self, history: Sequence[SampleTrialResult], best_param_sample: ParamSample | None) -> str:
-        lines = ["### Table detection", ""]
-        for ordinal, result in enumerate(history, 1):
-            lines.extend((f"#### Sample {ordinal}", "",
-                          "| Worksheet | Ground truth | Prediction | TP | FP | FN | Precision | Recall | F1 | Diagnostic |",
-                          "|---|---|---|---:|---:|---:|---:|---:|---:|---|"))
-            details = result.feedback.get("items", []) if isinstance(result.feedback, Mapping) else []
-            for item in details:
-                values = [item.get("input"), item.get("reference"), item.get("prediction"),
-                          *[item.get(key) for key in ("tp", "fp", "fn", "precision", "recall", "f1")],
-                          item.get("error")]
-                cells = [json.dumps(value, ensure_ascii=False, sort_keys=True).replace("|", "\\|") for value in values]
-                lines.append("| " + " | ".join(cells) + " |")
-            lines.append("")
+    def render_report(self, *, param_sample, runs, metrics, score, feedback) -> str:
+        lines = [super().render_report(param_sample=param_sample, runs=runs, metrics=metrics, score=score, feedback=feedback),
+                 "## Table detection", "", "| Worksheet | Ground truth | Prediction | TP | FP | FN | Precision | Recall | F1 | Diagnostic |",
+                 "|---|---|---|---:|---:|---:|---:|---:|---:|---|"]
+        details = feedback.get("items", []) if isinstance(feedback, Mapping) else []
+        for item in details:
+            values = [item.get("input"), item.get("ground_truth"), item.get("prediction"),
+                      *[item.get(key) for key in ("tp", "fp", "fn", "precision", "recall", "f1")], item.get("error")]
+            cells = [json.dumps(value, ensure_ascii=False, sort_keys=True).replace("|", "\\|") for value in values]
+            lines.append("| " + " | ".join(cells) + " |")
+        lines.append("")
         return "\n".join(lines)
 
 

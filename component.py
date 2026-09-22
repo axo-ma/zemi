@@ -965,7 +965,8 @@ class ZemiComponent:
             config = playbook.optimizer_config["sample_trial"]
             try:
                 sample_trial = resolve_sample_trial(config, execute=lambda **kwargs: {})
-                items = list(sample_trial.load_dataset())
+                trial_dataset = sample_trial.load_dataset()
+                items = trial_dataset.items
                 if not items:
                     raise ValueError("dataset must not be empty")
                 ids = set()
@@ -979,7 +980,7 @@ class ZemiComponent:
                     if key in ids:
                         raise ValueError(f"dataset[{index}].id is duplicated")
                     ids.add(key)
-                prepared[playbook.playbook_id] = (items, sample_trial)
+                prepared[playbook.playbook_id] = (trial_dataset, sample_trial)
             except Exception as error:
                 raise ValueError(f"modules.{playbook.playbook_id}.optimizer.sample_trial: {error}") from error
         return prepared
@@ -994,7 +995,8 @@ class ZemiComponent:
         session.model(model_name)
 
     def _run_optimization(self, playbook, prepared, session=None):
-        items, sample_trial = prepared
+        trial_dataset, sample_trial = prepared
+        items = trial_dataset.items
         config = playbook.optimizer_config
         optimizer = PlaybookOptimizer(
             config=config,
@@ -1002,7 +1004,7 @@ class ZemiComponent:
         )
         parent = {"playbook_trial_id": playbook.playbook_id, "playbook_id": playbook.playbook_id,
                   "arsenal": playbook.arsenal_id,
-                  "report_markdown": f"sample_trials/{playbook.playbook_id}.report.md",
+                  "report_markdown": f"sample_trials/{playbook.playbook_id}.optimization.md",
                   "optimizer": {key: copy.deepcopy(config[key]) for key in ("mode", "strategy", "max_trials", "seed", "blocks") if key in config},
                   "started_at": _timestamp(), "finished_at": None, "status": "running", "samples": [],
                   "ranking": [], "best_sample": None}
@@ -1015,7 +1017,9 @@ class ZemiComponent:
             if session is not None:
                 self._activate_managed_model(session, sample.values)
             started = _timestamp()
-            record = {"playbook_run_id": f"{playbook.playbook_id}-run-{serial:06d}", "item": copy.deepcopy(item),
+            record = {"run_id": f"{playbook.playbook_id}-run-{serial:06d}",
+                      "playbook_run_id": f"{playbook.playbook_id}-run-{serial:06d}",
+                      "dataset_item_id": item.get("id"), "item": copy.deepcopy(item),
                       "prediction": None, "error": None, "started_at": started, "status": "running"}
 
             def execute(inputs):
@@ -1056,16 +1060,22 @@ class ZemiComponent:
 
         def save_sample(trial):
             sample_id = f"{playbook.playbook_id}-sample-{len(history):04d}"
+            for record in trial.runs:
+                record["sample_trial_id"] = sample_id
+            report_path = f"sample_trials/{sample_id}.md"
+            trial.report = report_path
+            report_file = self.run_directory / report_path
+            report_file.parent.mkdir(parents=True, exist_ok=True)
+            report_file.write_text(sample_trial.render_report(param_sample=trial.sample, runs=trial.runs,
+                metrics=trial.metrics, score=trial.score, feedback=trial.feedback), encoding="utf-8")
             parent["samples"].append({"sample_trial_id": sample_id, "proposal_ordinal": len(history),
                 "params": {key: ("***" if key in playbook.secret_param_names else value)
                            for key, value in trial.sample.values.items()},
                 "runs": trial.runs, "metrics": trial.metrics, "feedback": trial.feedback,
-                "score": trial.score,
+                "score": trial.score, "report": report_path,
                 "error": trial.error, "status": trial.status, "artifacts": trial.artifacts,
                 "run_errors": sum(r.get("status") == "failed" for r in trial.runs),
                 "started_at": trial.started_at, "finished_at": trial.finished_at})
-            for record in trial.runs:
-                record["sample_trial_id"] = sample_id
             ranked = sorted((s for s in parent["samples"] if s["error"] is None),
                             key=lambda s: s["score"], reverse=True)
             parent["ranking"] = [s["sample_trial_id"] for s in ranked]
@@ -1073,12 +1083,6 @@ class ZemiComponent:
             parent["best_params"] = ranked[0]["params"] if ranked else None
             self.report.save()  # Persist the generic result before domain rendering.
             best = optimizer.best_param_sample(history)
-            self.report.set_sample_trial_markdown(
-                playbook.playbook_id,
-                (sample_trial.render_report(history, best)
-                 if len(inspect.signature(sample_trial.render_report).parameters) == 2
-                 else sample_trial.render_report(history, parent["optimizer"], best)),
-            )
             self.report.save()
 
         try:
@@ -1090,7 +1094,7 @@ class ZemiComponent:
                 try:
                     run_parameters = inspect.signature(sample_trial.run).parameters
                     if "module" in run_parameters:
-                        runs = sample_trial.run(module=playbook, param_sample=sample, dataset=items)
+                        runs = sample_trial.run(module=playbook, param_sample=sample, dataset=trial_dataset)
                     else:
                         warnings.warn(
                             "SampleTrial.run(playbook, sample, dataset) is deprecated; use module and param_sample",
@@ -1099,7 +1103,7 @@ class ZemiComponent:
                         )
                         runs = sample_trial.run(playbook=playbook, sample=sample, dataset=items)
                     if "dataset" in inspect.signature(sample_trial.evaluate).parameters:
-                        evaluated = sample_trial.evaluate(runs=runs, dataset=items)
+                        evaluated = sample_trial.evaluate(runs=runs, dataset=trial_dataset)
                     else:
                         warnings.warn(
                             "SampleTrial.evaluate(runs) is deprecated; accept evaluate(runs, dataset)",
@@ -1120,6 +1124,17 @@ class ZemiComponent:
                 if config.get("mode", "optimize") == "start_only":
                     break
             parent["status"] = "failed" if any(s.error for s in history) else "succeeded"
+            best = optimizer.best_param_sample(history)
+            progress_path = self.run_directory / f"sample_trials/{playbook.playbook_id}.optimization.md"
+            progress_path.write_text(optimizer.render_report(history=history, best_param_sample=best), encoding="utf-8")
+            dataset_markdown, detail_documents = trial_dataset.render_report(history=history)
+            dataset_path = self.run_directory / f"sample_trials/{playbook.playbook_id}.dataset.md"
+            dataset_path.write_text(dataset_markdown, encoding="utf-8")
+            for relative, content in detail_documents.items():
+                target = self.run_directory / "sample_trials" / relative
+                target.parent.mkdir(parents=True, exist_ok=True); target.write_text(content, encoding="utf-8")
+            parent["optimization_report"] = str(progress_path.relative_to(self.run_directory)).replace("\\", "/")
+            parent["dataset_report"] = str(dataset_path.relative_to(self.run_directory)).replace("\\", "/")
             if parent["status"] == "failed":
                 raise ValueError(f"PlaybookTrial {playbook.playbook_id}: SampleTrial failed; see report")
         except Exception:

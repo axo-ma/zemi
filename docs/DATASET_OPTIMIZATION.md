@@ -21,22 +21,24 @@ as `@comp/path.py:ClassName`, MUST inherit `SampleTrial`, and is trusted Compone
 code confined to the Component path.
 
 ```python
-sample_trial = SampleTrial(config)
-dataset = sample_trial.load_dataset()
+sample_trial = TableDetectionSampleTrial(config=module.optimizer.sample_trial)
+trial_dataset = TrialDataset.load(sample_trial.config.dataset)
 
 while param_sample := optimizer.next_param_sample(history):
-    runs = sample_trial.run(module=module, param_sample=param_sample, dataset=dataset)
-    metrics, score, feedback = sample_trial.evaluate(runs=runs, dataset=dataset)
+    runs = sample_trial.run(module=module, param_sample=param_sample, dataset=trial_dataset)
+    metrics, score, feedback = sample_trial.evaluate(runs=runs, dataset=trial_dataset)
+    report = sample_trial.render_report(param_sample=param_sample, runs=runs, metrics=metrics, score=score, feedback=feedback)
     history.append(sample_trial.result(
         param_sample=param_sample,
         runs=runs,
         metrics=metrics,
         score=score,
-        feedback=feedback,
+        feedback=feedback, report=report,
     ))
 
 best = optimizer.best_param_sample(history)
-report = sample_trial.render_report(history, best)
+optimizer.render_report(history=history, best_param_sample=best)
+trial_dataset.render_report(history=history)
 ```
 
 Score alone drives descending ranking. Metrics remain complete diagnostics.
@@ -48,7 +50,7 @@ A DatasetItem has an `id`, Module-facing `input`, and evaluator-facing
 `reference`. For example:
 
 ```json
-{"id":"sheet-1","input":{"worksheet_name":"Данные"},"reference":["A1:B2"]}
+{"items":[{"id":"sheet-1","input":{"workbook_path":"@comp/data/book.xlsx","worksheet_name":"Данные"},"ground_truth":["A1:B2"]}]}
 ```
 
 The built-in `TableDetectionSampleTrial` uses one reviewed JSON file per split.

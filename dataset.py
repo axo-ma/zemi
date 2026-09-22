@@ -7,6 +7,8 @@ import importlib.util
 import json
 import re
 from collections import Counter, defaultdict
+from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
 from typing import Any, TypedDict
 
@@ -18,7 +20,64 @@ class DatasetItem(TypedDict):
 
     id: str | int
     input: dict[str, Any]
-    reference: Any
+    ground_truth: Any
+
+
+@dataclass(frozen=True)
+class TrialDataset:
+    """A validated flat dataset whose in-memory shape matches its JSON shape."""
+    items: list[DatasetItem]
+    source: Path | None = None
+
+    @classmethod
+    def load(cls, path: str) -> "TrialDataset":
+        source = zemi_path(path)
+        raw = json.loads(source.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict) or set(raw) != {"items"} or not isinstance(raw["items"], list):
+            raise ValueError(f"{source}: expected exactly one items array")
+        result, identities = [], set()
+        for index, value in enumerate(raw["items"]):
+            label = f"items[{index}]"
+            if not isinstance(value, dict): raise ValueError(f"{label}: expected object")
+            missing = {"id", "input", "ground_truth"} - set(value)
+            unknown = set(value) - {"id", "description", "input", "ground_truth", "tags"}
+            if missing or unknown: raise ValueError(f"{label}: missing {sorted(missing)}; unsupported {sorted(unknown)}")
+            identity = value["id"]
+            if not isinstance(identity, str) or not identity or identity in identities:
+                raise ValueError(f"{label}.id: expected unique non-empty string")
+            identities.add(identity)
+            inputs = value["input"]
+            if not isinstance(inputs, dict): raise ValueError(f"{label}.input: expected object")
+            path_value, sheet = inputs.get("workbook_path"), inputs.get("worksheet_name")
+            if path_value is not None or sheet is not None:
+                if not isinstance(path_value, str) or not path_value.startswith(("@comp/", "@inst/")):
+                    raise ValueError(f"{label}.input.workbook_path: expected @comp/... or @inst/...")
+                if not zemi_path(path_value).is_file(): raise FileNotFoundError(path_value)
+                if not isinstance(sheet, str) or not sheet: raise ValueError(f"{label}.input.worksheet_name: expected string")
+            truth = value["ground_truth"]
+            if not isinstance(truth, list): raise ValueError(f"{label}.ground_truth: expected array")
+            truth = [exact_range(item) for item in truth]
+            tags = value.get("tags", [])
+            if len(truth) != len(set(truth)): raise ValueError(f"{label}.ground_truth: duplicate range")
+            if not isinstance(tags, list) or not all(isinstance(tag, str) for tag in tags): raise ValueError(f"{label}.tags: expected strings")
+            if "description" in value and not isinstance(value["description"], str): raise ValueError(f"{label}.description: expected string")
+            result.append(json.loads(json.dumps(value, ensure_ascii=False)))
+        return cls(result, source)
+
+    def render_report(self, *, history: Sequence[Any]):
+        rows = ["# Trial Dataset Report", "", "| Dataset Item | Runs | Executed | Exact Match | Avg F1 | Best F1 | Details |", "|---|---:|---:|---:|---:|---:|---|"]
+        details = {}
+        for item in self.items:
+            found = [(i, trial, run) for i, trial in enumerate(history, 1) for run in trial.runs if run.get("dataset_item_id") == item["id"]]
+            f1s = [float(run.get("metrics", {}).get("f1", 0)) for _, _, run in found]
+            name = f"dataset-items/{item['id']}.md"
+            rows.append(f"| {item['id']} | {len(found)} | {sum(r.get('status') == 'succeeded' for _,_,r in found)} | {sum(bool(r.get('metrics', {}).get('exact_match')) for _,_,r in found)} | {sum(f1s)/len(f1s) if f1s else 0:.3f} | {max(f1s, default=0):.3f} | [Details]({name}) |")
+            body = [f"# Dataset Item: {item['id']}", "", item.get("description", ""), "", "Ground truth:", "", "```json", json.dumps(item["ground_truth"], ensure_ascii=False, indent=2), "```", "", "| Trial | Param Sample | Status | Prediction | F1 | Sample Trial |", "|---:|---|---|---|---:|---|"]
+            for ordinal, trial, run in found:
+                params = " / ".join(f"{k}={v}" for k, v in trial.sample.values.items())
+                body.append(f"| {ordinal} | {params} | {run.get('status')} | {json.dumps(run.get('prediction'), ensure_ascii=False).replace('|', chr(92)+'|')} | {run.get('metrics', {}).get('f1', 0):.3f} | [Sample Trial](../{Path(trial.report).name}) |")
+            details[name] = "\n".join(body) + "\n"
+        return "\n".join(rows) + "\n", details
 
 
 def zemi_path(value):
@@ -64,72 +123,8 @@ def _indexed(rows, label):
 
 
 def table_dataset(*, path, params):
-    """Validate the entire COCO-like split, opening at most one workbook."""
-    from openpyxl import load_workbook
-    source = zemi_path(path)
-    data = json.loads(source.read_text(encoding="utf-8"))
-    if not isinstance(data, dict) or not isinstance(data.get("info"), dict):
-        raise ValueError(f"{source}: info must be an object")
-    relative_path(source.parent, data.get("annotation_policy"), "annotation_policy")
-    books = _indexed(data.get("workbooks"), "workbooks")
-    sheets = _indexed(data.get("worksheets"), "worksheets")
-    annotations = _indexed(data.get("annotations"), "annotations")
-    if not books or not sheets:
-        raise ValueError("dataset must contain workbooks and worksheets")
-    by_book = defaultdict(list)
-    gt = defaultdict(list)
-    pairs = set()
-    for key, sheet in sheets.items():
-        label = f"worksheets[{key}]"
-        book_id = sheet.get("workbook_id")
-        if book_id not in books:
-            raise ValueError(f"{label}.workbook_id: unknown workbook")
-        if sheet.get("status") != "reviewed":
-            raise ValueError(f"{label}.status: must be reviewed (draft/blocked/unannotated are not executable)")
-        name = sheet.get("name")
-        if not isinstance(name, str) or not name or (book_id, name) in pairs:
-            raise ValueError(f"{label}.name: invalid or duplicate worksheet")
-        tags = sheet.get("tags", [])
-        if not isinstance(tags, list) or not all(isinstance(t, str) for t in tags):
-            raise ValueError(f"{label}.tags: expected strings")
-        pairs.add((book_id, name))
-        by_book[book_id].append((key, sheet))
-    for key, annotation in annotations.items():
-        sheet_id = annotation.get("worksheet_id")
-        if sheet_id not in sheets or annotation.get("workbook_id") != sheets[sheet_id]["workbook_id"]:
-            raise ValueError(f"annotations[{key}]: invalid workbook/worksheet reference")
-        if annotation.get("status") != "reviewed":
-            raise ValueError(f"annotations[{key}].status: must be reviewed")
-        value = exact_range(annotation.get("range"))
-        if value in gt[sheet_id]:
-            raise ValueError(f"annotations[{key}]: duplicate exact range")
-        gt[sheet_id].append(value)
-    items = []
-    seen_paths = set()
-    for book_id, book in books.items():
-        label = f"workbooks[{book_id}]"
-        filename = relative_path(source.parent, book.get("path"), f"{label}.path")
-        if filename in seen_paths or not by_book[book_id]:
-            raise ValueError(f"{label}: duplicate workbook path or no worksheets")
-        seen_paths.add(filename)
-        expected = book.get("sha256")
-        if not isinstance(expected, str) or not re.fullmatch("[0-9a-f]{64}", expected):
-            raise ValueError(f"{label}.sha256: expected lowercase SHA-256")
-        with filename.open("rb") as stream:
-            actual = hashlib.file_digest(stream, "sha256").hexdigest()
-        if actual != expected:
-            raise ValueError(f"{label}.sha256: mismatch for {filename}; expected {expected}, got {actual}")
-        workbook = load_workbook(filename, read_only=True, data_only=True)
-        try:
-            for key, sheet in by_book[book_id]:
-                if sheet["name"] not in workbook.sheetnames:
-                    raise ValueError(f"worksheets[{key}].name: {sheet['name']!r} not found in {filename}")
-                items.append({"id": key, "workbook_id": book_id,
-                              "input": {"workbook_path": str(filename), "worksheet_name": sheet["name"]},
-                              "reference": gt[key], "tags": sheet.get("tags", []), "status": "reviewed"})
-        finally:
-            workbook.close()
-    return items
+    """Load the canonical flat table-detection dataset without normalization."""
+    return TrialDataset.load(path).items
 
 
 def _scores(tp, fp, fn):
@@ -147,7 +142,7 @@ def table_evaluator(trial, *, params):
     errors = empty = empty_correct = 0
     for run in trial.runs:
         item = run["item"]
-        truth = Counter(item["reference"])
+        truth = Counter(item["ground_truth"])
         execution_error = run.get("error")
         diagnostic = None
         prediction = run.get("prediction")
@@ -175,10 +170,12 @@ def table_evaluator(trial, *, params):
             total[i] += value
             for tag in set(item.get("tags", [])):
                 tags[tag][i] += value
+        item_metrics = {**_scores(tp, fp, fn), "exact_match": not diagnostic and truth == found}
+        run.update(dataset_item_id=item["id"], metrics=item_metrics)
         details.append({"item_id": item["id"], "input": item["input"], "tags": item.get("tags", []),
-                        "reference": item["reference"], "prediction": prediction,
+                        "ground_truth": item["ground_truth"], "prediction": prediction,
                         "error": diagnostic, "execution_status": run.get("status"),
-                        "evaluation_status": run.get("evaluation_status"), **_scores(tp, fp, fn)})
+                        "evaluation_status": run.get("evaluation_status"), **item_metrics})
     return {**_scores(*total), "items": len(details), "errors": errors,
             "reviewed_empty": empty, "correct_empty": empty_correct}, {
                 "items": details, "tags": {tag: _scores(*values) for tag, values in tags.items()}}

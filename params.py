@@ -408,6 +408,7 @@ class SampleResult:
     score: float | None = None
     status: str = "succeeded"
     artifacts: dict[str, Any] = field(default_factory=dict)
+    report: str | None = None
 
 
 # Compatibility name; canonical documentation and custom SampleTrials need not use it.
@@ -506,6 +507,32 @@ class PlaybookOptimizer:
     def observe(self, history: Sequence[SampleTrialResult], result: SampleTrialResult) -> None:
         if result.sample.key() in {item.sample.key() for item in history[:-1]}:
             raise ValueError("optimizer proposed a duplicate ParamSample")
+
+    @staticmethod
+    def _short_sample(sample: ParamSample, limit: int = 72) -> str:
+        parts, used = [], 0
+        for key, value in sample.values.items():
+            part = f"{key}={json.dumps(value, ensure_ascii=False)}"
+            extra = len(part) + (3 if parts else 0)
+            if parts and used + extra > limit:
+                return " / ".join(parts) + " / …"
+            parts.append(part); used += extra
+        return " / ".join(parts)
+
+    def render_report(self, *, history: Sequence[SampleTrialResult], best_param_sample: ParamSample | None) -> str:
+        metrics = [name for name in ("precision", "recall", "f1") if any(name in item.metrics for item in history)]
+        headers = ["#", "Param Sample", "Score", *[name.title() for name in metrics], "Report"]
+        lines = ["# Optimization Progress Report", "", "| " + " | ".join(headers) + " |", "|" + "|".join("---:" if i not in (1, len(headers)-1) else "---" for i in range(len(headers))) + "|"]
+        for ordinal, item in enumerate(history, 1):
+            best = best_param_sample is not None and item.sample.key() == best_param_sample.key()
+            label = "Best" if best else "Details"
+            values = [str(ordinal), self._short_sample(item.sample), str(item.score), *[f"{item.metrics.get(name, 0):.3f}" for name in metrics], f"[{label}]({item.report})"]
+            if best: values = [f"**{value}**" for value in values]
+            lines.append("| " + " | ".join(values) + " |")
+        return "\n".join(lines) + "\n"
+
+
+ModuleOptimizer = PlaybookOptimizer
 
 
 class ParamSampler(PlaybookOptimizer):

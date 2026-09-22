@@ -23,8 +23,9 @@ PlaybookOptimizer, SampleTrial, the trial hierarchy, and reports.
 - Arsenal optionally supplies named model endpoints and client integrations.
 - PlaybookOptimizer exposes `next_param_sample(history)` and
   `best_param_sample(history)` and always maximizes finite numeric score.
-- SampleTrial is the one public experiment extension. It owns dataset loading,
-  per-item execution, evaluation, result construction, and domain Markdown.
+- TrialDataset owns flat dataset loading, validation, and its cross-history report.
+- SampleTrial owns per-item execution, evaluation, result construction, and one
+  individual Sample Trial Report. ModuleOptimizer owns Optimization Progress.
 - `SampleTrial.evaluate(runs, dataset)` returns `(metrics, score, feedback)`.
 
 DSPy or another framework MAY implement a SampleTrial or optimizer, but is not
@@ -48,7 +49,7 @@ complete start-sample trial; `mode = "optimize"` runs the full loop.
 
 `JobTrial → ModuleTrial → SampleTrial → ModuleRun`
 
-SampleTrial evaluates after its PlaybookRuns are collected. Its result stores
+Each Run is the intersection of a SampleTrial and DatasetItem. SampleTrial evaluates after its Module runs are collected. Its result stores
 the sample, runs, finite scalar score, complete finite metrics, optional JSON
 feedback, statuses, timestamps, failures, and artifacts. Reports preserve those
 values, descending score ranking, best params, and optimizer configuration.

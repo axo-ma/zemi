@@ -63,21 +63,24 @@ mode = { select = ["optimize", "start_only"] }
   including dataset runs, evaluation, history, best sample, and report.
 - `optimize` runs the full score-maximizing loop.
 
+`TrialDataset.load(sample_trial.config.dataset)` validates the flat dataset once.
 `SampleTrial.run(module, param_sample, dataset)` executes once per DatasetItem.
-`SampleTrial.evaluate(runs, dataset)` sees the same dataset and its evaluator-only
-`reference`. It returns `(metrics, score, feedback)`. All finite numeric metrics
+Only `DatasetItem.input` and Module params cross the Module boundary.
+`SampleTrial.evaluate(runs, dataset)` sees evaluator-only `ground_truth`, optional
+`description`, and optional `tags`. It returns `(metrics, score, feedback)`. All finite numeric metrics
 are retained, while the optimizer always maximizes the single finite `score`.
-History stores params, runs, metrics, score, optional feedback, errors, and
-artifacts. `render_report(history, best_param_sample)` receives the complete
-history and best sample.
+History stores params, runs, per-item metrics, score, optional feedback, errors,
+artifacts, and the individual Sample Trial Report path. SampleTrial renders only
+its own trial; ModuleOptimizer renders Optimization Progress and TrialDataset
+renders the cross-trial item report.
 
 ## Dataset item
 
 ```json
-{"id":"sheet-1","input":{"worksheet_name":"Данные"},"reference":{"ranges":["A1:D20"]}}
+{"items":[{"id":"sheet-1","description":"Основная таблица","input":{"workbook_path":"@comp/data/book.xlsx","worksheet_name":"Данные"},"ground_truth":["A1:D20"],"tags":["header"]}]}
 ```
 
-Only `input` is passed to a Playbook. `reference` remains evaluator-side.
+Only `input` is passed to a Module. `ground_truth`, `description`, and `tags` remain evaluator-side.
 User-facing JSON, notebook parameters, snapshots, logs, and reports are UTF-8
 and preserve readable Unicode rather than emitting literal `\\uXXXX` escapes.
 
@@ -87,4 +90,3 @@ Params 0.5 documents are accepted as a deprecated migration source. They are
 normalized in memory to 0.6 with a `DeprecationWarning`: `[[playbooks]]` becomes
 `[[modules]]` and gains `kind = "playbook"`. New and edited files must use 0.6.
 The older 0.3 migration path remains available and also produces canonical 0.6.
-
