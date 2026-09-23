@@ -23,11 +23,7 @@ class SampleTrial:
     def __init__(self, config: Mapping[str, Any], *, execute: Callable[..., dict[str, Any]]) -> None:
         self.config = dict(config)
         self.params = dict(self.config.get("params", {}))
-        self.dataset = self.config.get("dataset")
         self.execute = execute
-
-    def load_dataset(self) -> TrialDataset:
-        return TrialDataset.load(self.dataset)
 
     def run(self, *, module: Any = None, playbook: Any = None, param_sample: ParamSample | None = None,
             sample: ParamSample | None = None, dataset: TrialDataset | Sequence[Any]) -> list[dict[str, Any]]:
@@ -81,9 +77,6 @@ class SampleTrial:
 
 class TableDetectionSampleTrial(SampleTrial):
     """Built-in exact table-boundary SampleTrial; score defaults to aggregate F1."""
-
-    def load_dataset(self) -> TrialDataset:
-        return TrialDataset.load(self.dataset)
 
     def evaluate(self, *, runs: Sequence[dict[str, Any]], dataset: Sequence[Any]) -> tuple[Mapping[str, Any], float, Any]:
         metrics, feedback = table_evaluator(SimpleNamespace(runs=runs), params=self.params)
@@ -170,7 +163,7 @@ def resolve_sample_trial(config: Mapping[str, Any], *, execute: Callable[..., di
         if not issubclass(factory, SampleTrial):
             raise ValueError(f"SampleTrial type {implementation!r} must inherit SampleTrial")
         instance = factory(config=config, execute=execute)
-    required = ("load_dataset", "run", "evaluate", "result", "render_report")
+    required = ("run", "evaluate", "result", "render_report")
     missing = [name for name in required if not callable(getattr(instance, name, None))]
     if missing:
         raise ValueError(f"SampleTrial implementation is missing methods: {', '.join(missing)}")

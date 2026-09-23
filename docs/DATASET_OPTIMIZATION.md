@@ -22,7 +22,7 @@ code confined to the Component path.
 
 ```python
 sample_trial = TableDetectionSampleTrial(config=module.optimizer.sample_trial)
-trial_dataset = TrialDataset.load(sample_trial.config.dataset)
+trial_dataset = TrialDataset.load(module.optimizer.trial_dataset.path)
 
 while param_sample := optimizer.next_param_sample(history):
     runs = sample_trial.run(module=module, param_sample=param_sample, dataset=trial_dataset)

@@ -33,7 +33,9 @@ max_trials = 30
 
 [modules.optimizer.sample_trial]
 type = "@comp/zemi/sample_trial.py:TableDetectionSampleTrial"
-dataset = "@comp/data/experiment5/validation.json"
+
+[modules.optimizer.trial_dataset]
+path = "@comp/data/experiment5/validation.json"
 ```
 
 Only `kind = "playbook"` has a runtime in 0.6. Other kinds are rejected clearly;
@@ -63,7 +65,10 @@ mode = { select = ["optimize", "start_only"] }
   including dataset runs, evaluation, history, best sample, and report.
 - `optimize` runs the full score-maximizing loop.
 
-`TrialDataset.load(sample_trial.config.dataset)` validates the flat dataset once.
+`[modules.optimizer.trial_dataset]` owns the dataset path. Its `path` field is
+required for variable Module parameters. `TrialDataset.load(path)` validates the
+flat dataset once before Arsenal starts. The SampleTrial section selects the
+class and holds only its optional `params`.
 `SampleTrial.run(module, param_sample, dataset)` executes once per DatasetItem.
 Only `DatasetItem.input` and Module params cross the Module boundary.
 `SampleTrial.evaluate(runs, dataset)` sees evaluator-only `ground_truth`, optional
@@ -88,5 +93,6 @@ and preserve readable Unicode rather than emitting literal `\\uXXXX` escapes.
 
 Params 0.5 documents are accepted as a deprecated migration source. They are
 normalized in memory to 0.6 with a `DeprecationWarning`: `[[playbooks]]` becomes
-`[[modules]]` and gains `kind = "playbook"`. New and edited files must use 0.6.
+`[[modules]]` and gains `kind = "playbook"`; `sample_trial.dataset` moves to
+`trial_dataset.path`. New and edited files must use 0.6.
 The older 0.3 migration path remains available and also produces canonical 0.6.

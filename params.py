@@ -22,8 +22,9 @@ _SYSTEM_KEYS = {"version", "params"}
 _COMPONENT_KEYS = {"name", "stop_on_error", "params"}
 _ARSENAL_KEYS = {"id", "config_path", "lifecycle", "params"}
 _MODULE_KEYS = {"id", "kind", "path", "arsenal", "enabled", "params", "optimizer"}
-_OPTIMIZER_KEYS = {"mode", "strategy", "max_trials", "max_samples", "seed", "blocks", "sample_trial"}
+_OPTIMIZER_KEYS = {"mode", "strategy", "max_trials", "max_samples", "seed", "blocks", "sample_trial", "trial_dataset"}
 _TRIAL_KEYS = {"type", "dataset", "params"}
+_TRIAL_DATASET_KEYS = {"path"}
 _LEGACY_TRIAL_KEYS = {"dataset", "evaluator", "objective", "run"}
 _DATASET_KEYS = {"adapter", "path", "params"}
 _EVALUATOR_KEYS = {"adapter", "params"}
@@ -157,6 +158,8 @@ def validate_document(document: Mapping[str, Any]) -> dict[str, Any]:
                 )
             if "sample_trial" not in item["optimizer"]:
                 raise ValueError(f"{label}.optimizer.sample_trial is required for variable parameters")
+            if "trial_dataset" not in item["optimizer"]:
+                raise ValueError(f"{label}.optimizer.trial_dataset is required for variable parameters")
         elif not _may_resolve_dimensions(item["params"]):
             if "optimizer" in item:
                 raise ValueError(f"{label}.optimizer is not allowed because {label}.params are all fixed")
@@ -191,6 +194,16 @@ def _validate_optimizer(raw: Any, label: str) -> dict[str, Any]:
         optimizer["blocks"] = _validate_blocks_shape(blocks, f"{label}.blocks")
     elif blocks is not None:
         raise ValueError(f"{label}.blocks is valid only for block_coordinate")
+    if isinstance(optimizer.get("sample_trial"), Mapping) and "dataset" in optimizer["sample_trial"]:
+        if "trial_dataset" in optimizer:
+            raise ValueError(f"{label} must not define both sample_trial.dataset and trial_dataset")
+        optimizer["trial_dataset"] = {"path": optimizer["sample_trial"].pop("dataset")}
+        warnings.warn("sample_trial.dataset is deprecated; use optimizer.trial_dataset.path", DeprecationWarning, stacklevel=3)
+    if "trial_dataset" in optimizer:
+        dataset = _table(optimizer["trial_dataset"], f"{label}.trial_dataset")
+        _closed(dataset, _TRIAL_DATASET_KEYS, f"{label}.trial_dataset")
+        dataset["path"] = _path(dataset.get("path"), f"{label}.trial_dataset.path")
+        optimizer["trial_dataset"] = dataset
     if "sample_trial" not in optimizer:
         return optimizer
     trial = _table(optimizer["sample_trial"], f"{label}.sample_trial")
@@ -198,10 +211,6 @@ def _validate_optimizer(raw: Any, label: str) -> dict[str, Any]:
     trial_type = trial.get("type")
     if not isinstance(trial_type, str) or not re.fullmatch(r"@comp/[^:]+\.py:[A-Za-z_][A-Za-z0-9_]*", trial_type):
         raise ValueError(f"{label}.sample_trial.type must be @comp/path.py:ClassName")
-    dataset = trial.get("dataset")
-    if not isinstance(dataset, str) or not dataset:
-        raise ValueError(f"{label}.sample_trial.dataset must be a non-empty path string")
-    _path(dataset, f"{label}.sample_trial.dataset")
     trial["params"] = _params(trial.get("params", {}), f"{label}.sample_trial.params")
     optimizer["sample_trial"] = trial
     return optimizer
@@ -235,9 +244,9 @@ def _migrate_03(doc: dict[str, Any]) -> dict[str, Any]:
                 raise ValueError("Params 0.3 legacy adapter-style SampleTrial cannot be migrated automatically")
             optimizer["sample_trial"] = {
                 "type": trial_type,
-                "dataset": old_trial.get("path"),
                 "params": copy.deepcopy(old_trial.get("params", {})),
             }
+            optimizer["trial_dataset"] = {"path": old_trial.get("path")}
         playbook["optimizer"] = optimizer
     migrated["modules"] = migrated.pop("playbooks", [])
     for module in migrated["modules"]:

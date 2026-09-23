@@ -957,6 +957,7 @@ class ZemiComponent:
         self._closed = False; self.report.save()
 
     def _prepare_sample_trials(self):
+        from .dataset import TrialDataset
         from .sample_trial import resolve_sample_trial
         prepared = {}
         for playbook in self.playbooks:
@@ -965,7 +966,7 @@ class ZemiComponent:
             config = playbook.optimizer_config["sample_trial"]
             try:
                 sample_trial = resolve_sample_trial(config, execute=lambda **kwargs: {})
-                trial_dataset = sample_trial.load_dataset()
+                trial_dataset = TrialDataset.load(playbook.optimizer_config["trial_dataset"]["path"])
                 items = trial_dataset.items
                 if not items:
                     raise ValueError("dataset must not be empty")
@@ -982,7 +983,7 @@ class ZemiComponent:
                     ids.add(key)
                 prepared[playbook.playbook_id] = (trial_dataset, sample_trial)
             except Exception as error:
-                raise ValueError(f"modules.{playbook.playbook_id}.optimizer.sample_trial: {error}") from error
+                raise ValueError(f"modules.{playbook.playbook_id}.optimizer.trial_dataset: {error}") from error
         return prepared
 
     @staticmethod
