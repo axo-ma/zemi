@@ -43,6 +43,10 @@ the Module contract permits adding them later without pretending they work now.
 
 ## Structural and resolution rules
 
+An explicit component parameter TOML may be located anywhere inside the
+component root and selected with `@comp/path/to/file.toml`. Bare filenames and
+automatic selection continue to use the root `params/` directory.
+
 The only top-level sections are `system`, `component`, `arsenals`, and `modules`.
 Structural tables are closed. Free-form Module inputs belong only in
 `[modules.params]`. Arsenal definitions are peers of Modules, and both Arsenal

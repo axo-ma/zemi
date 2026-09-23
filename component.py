@@ -165,9 +165,9 @@ def _resolve_params_path(value: str | Path, root: Path) -> Path:
         path = params / path
     resolved = path.resolve()
     try:
-        resolved.relative_to(params.resolve())
+        resolved.relative_to(root.resolve())
     except ValueError:
-        raise ValueError("Parameter file must be inside @comp/params") from None
+        raise ValueError("Parameter file must be inside the component root") from None
     if resolved.suffix.lower() != ".toml":
         raise ValueError("Parameter file must have the .toml extension")
     if not resolved.is_file():
@@ -176,19 +176,19 @@ def _resolve_params_path(value: str | Path, root: Path) -> Path:
 
 
 def _resolve_params_glob(value: str | Path, root: Path) -> list[Path]:
-    params = (root / "params").resolve()
     label = str(value).replace("\\", "/")
     if label.startswith("@comp/"):
         label = label.removeprefix("@comp/")
-        if not label.startswith("params/"):
-            raise ValueError("Parameter glob must be inside @comp/params")
-        label = label.removeprefix("params/")
+        base = root.resolve()
+    else:
+        base = (root / "params").resolve()
     pattern = Path(label)
     if pattern.is_absolute() or ".." in pattern.parts:
-        raise ValueError("Parameter glob must be relative to @comp/params")
+        raise ValueError("Parameter glob must be relative to the component")
     if pattern.suffix.lower() != ".toml":
         raise ValueError("Parameter glob must select TOML files")
-    matches = [p.resolve() for p in sorted(params.glob(label), key=lambda p: p.name.casefold()) if p.is_file()]
+    matches = [p.resolve() for p in sorted(base.glob(label), key=lambda p: p.name.casefold())
+               if p.is_file() and p.resolve().is_relative_to(root.resolve())]
     if not matches:
         raise FileNotFoundError(f"Parameter glob matched no files: {value}")
     return matches
