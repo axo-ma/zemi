@@ -18,28 +18,46 @@ once without a SampleTrial. See [Params 0.6](ZEMI_PARAMS_0.6.md).
 
 SampleTrial is the only public experiment extension point. A class is selected
 as `@comp/path.py:ClassName`, MUST inherit `SampleTrial`, and is trusted Component
-code confined to the Component path.
+code confined to the Component path. One instance represents one parameter
+sample. The framework constructs the generic `SampleTrialResult`; a custom
+SampleTrial does not implement a `result()` method.
 
 ```python
-sample_trial = TableDetectionSampleTrial(config=module.optimizer.sample_trial)
-trial_dataset = TrialDataset.load(module.optimizer.trial_dataset.path)
+param_space = ParamSpace(config=module.params)
+optimizer = ModuleOptimizer(config=module.optimizer, param_space=param_space)
 
-while param_sample := optimizer.next_param_sample(history):
-    runs = sample_trial.run(module=module, param_sample=param_sample, dataset=trial_dataset)
-    metrics, score, feedback = sample_trial.evaluate(runs=runs, dataset=trial_dataset)
-    report = sample_trial.render_report(param_sample=param_sample, runs=runs, metrics=metrics, score=score, feedback=feedback)
-    history.append(sample_trial.result(
+trial_dataset = TableDetectionTrialDataset(config=module.optimizer.trial_dataset)
+trial_dataset.load()
+history = []
+
+while (param_sample := optimizer.next_param_sample(history)) is not None:
+    sample_trial = TableDetectionSampleTrial(
+        config=module.optimizer.sample_trial,
+        module=module,
         param_sample=param_sample,
-        runs=runs,
-        metrics=metrics,
-        score=score,
-        feedback=feedback, report=report,
-    ))
+        dataset=trial_dataset,
+    )
+    runs = sample_trial.run()
+    metrics, score, feedback = sample_trial.evaluate(runs)
+    report = sample_trial.render_report(runs, metrics, score, feedback)
+    history_item = SampleTrialResult(
+        sample=param_sample, runs=runs, metrics=metrics,
+        score=score, feedback=feedback, report=report,
+    )
+    history.append(history_item)
 
 best = optimizer.best_param_sample(history)
-optimizer.render_report(history=history, best_param_sample=best)
-trial_dataset.render_report(history=history)
+dataset_report = trial_dataset.render_report(history)
+save(dataset_report)  # gives the report a path
+optimization_report = optimizer.render_report(
+    history=history, best_param_sample=best,
+    dataset_report=dataset_report,
+)
 ```
+
+Other report storage is omitted from this conceptual loop. In the runner,
+`history_item.report` holds the saved Sample Trial Report path. The optimizer
+uses `dataset_report.path` to link to the saved dataset report.
 
 Score alone drives descending ranking. Metrics remain complete diagnostics.
 Feedback is optional JSON-compatible domain data.

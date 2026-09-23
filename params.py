@@ -528,14 +528,21 @@ class PlaybookOptimizer:
             parts.append(part); used += extra
         return " / ".join(parts)
 
-    def render_report(self, *, history: Sequence[SampleTrialResult], best_param_sample: ParamSample | None) -> str:
+    def render_report(self, *, history: Sequence[SampleTrialResult], best_param_sample: ParamSample | None,
+                      dataset_report: Any = None) -> str:
         metrics = [name for name in ("precision", "recall", "f1") if any(name in item.metrics for item in history)]
         headers = ["#", "Param Sample", "Score", *[name.title() for name in metrics], "Report"]
-        lines = ["# Optimization Progress Report", "", "| " + " | ".join(headers) + " |", "|" + "|".join("---:" if i not in (1, len(headers)-1) else "---" for i in range(len(headers))) + "|"]
+        lines = ["# Optimization Progress Report", ""]
+        if dataset_report is not None:
+            if not dataset_report.path:
+                raise ValueError("dataset report must have a saved path")
+            lines.extend((f"[Trial Dataset Report]({dataset_report.path})", ""))
+        lines.extend(("| " + " | ".join(headers) + " |", "|" + "|".join("---:" if i not in (1, len(headers)-1) else "---" for i in range(len(headers))) + "|"))
         for ordinal, item in enumerate(history, 1):
             best = best_param_sample is not None and item.sample.key() == best_param_sample.key()
             label = "Best" if best else "Details"
-            values = [str(ordinal), self._short_sample(item.sample), str(item.score), *[f"{item.metrics.get(name, 0):.3f}" for name in metrics], f"[{label}]({item.report})"]
+            report_link = Path(item.report).name if item.report else ""
+            values = [str(ordinal), self._short_sample(item.sample), str(item.score), *[f"{item.metrics.get(name, 0):.3f}" for name in metrics], f"[{label}]({report_link})"]
             if best: values = [f"**{value}**" for value in values]
             lines.append("| " + " | ".join(values) + " |")
         return "\n".join(lines) + "\n"

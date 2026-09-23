@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import copy
 import html
-import inspect
 import itertools
 import json
+import math
 import os
 import re
 import sys
@@ -20,7 +20,7 @@ from typing import Any, Mapping
 
 from . import env
 from .playbook import PLAYBOOK_OUTPUT_MIME, _output_context, validate_output_params
-from .params import ParamSample, ParamSpace, PlaybookOptimizer, validate_document
+from .params import ParamSample, ParamSpace, PlaybookOptimizer, SampleTrialResult, validate_document
 
 
 def _canonical_runtime(document: Mapping[str, Any]) -> dict[str, Any]:
@@ -957,7 +957,7 @@ class ZemiComponent:
         self._closed = False; self.report.save()
 
     def _prepare_sample_trials(self):
-        from .dataset import TrialDataset
+        from .dataset import TableDetectionTrialDataset
         from .sample_trial import resolve_sample_trial
         prepared = {}
         for playbook in self.playbooks:
@@ -966,7 +966,8 @@ class ZemiComponent:
             config = playbook.optimizer_config["sample_trial"]
             try:
                 sample_trial = resolve_sample_trial(config, execute=lambda **kwargs: {})
-                trial_dataset = TrialDataset.load(playbook.optimizer_config["trial_dataset"]["path"])
+                trial_dataset = TableDetectionTrialDataset(config=playbook.optimizer_config["trial_dataset"])
+                trial_dataset.load()
                 items = trial_dataset.items
                 if not items:
                     raise ValueError("dataset must not be empty")
@@ -996,8 +997,9 @@ class ZemiComponent:
         session.model(model_name)
 
     def _run_optimization(self, playbook, prepared, session=None):
-        trial_dataset, sample_trial = prepared
-        items = trial_dataset.items
+        from .sample_trial import resolve_sample_trial
+
+        trial_dataset, sample_trial_prototype = prepared
         config = playbook.optimizer_config
         optimizer = PlaybookOptimizer(
             config=config,
@@ -1005,7 +1007,7 @@ class ZemiComponent:
         )
         parent = {"playbook_trial_id": playbook.playbook_id, "playbook_id": playbook.playbook_id,
                   "arsenal": playbook.arsenal_id,
-                  "report_markdown": f"sample_trials/{playbook.playbook_id}.optimization.md",
+                  "report_markdown": f"sample_trials/{playbook.playbook_id}.summary.md",
                   "optimizer": {key: copy.deepcopy(config[key]) for key in ("mode", "strategy", "max_trials", "seed", "blocks") if key in config},
                   "started_at": _timestamp(), "finished_at": None, "status": "running", "samples": [],
                   "ranking": [], "best_sample": None}
@@ -1055,20 +1057,16 @@ class ZemiComponent:
             record["finished_at"] = _timestamp()
             return record
 
-        sample_trial.execute = execute_item
-
         history = []
 
-        def save_sample(trial):
+        def save_sample(trial, report_text):
             sample_id = f"{playbook.playbook_id}-sample-{len(history):04d}"
             for record in trial.runs:
                 record["sample_trial_id"] = sample_id
-            report_path = f"sample_trials/{sample_id}.md"
-            trial.report = report_path
+            report_path = trial.report
             report_file = self.run_directory / report_path
             report_file.parent.mkdir(parents=True, exist_ok=True)
-            report_file.write_text(sample_trial.render_report(param_sample=trial.sample, runs=trial.runs,
-                metrics=trial.metrics, score=trial.score, feedback=trial.feedback), encoding="utf-8")
+            report_file.write_text(report_text, encoding="utf-8")
             parent["samples"].append({"sample_trial_id": sample_id, "proposal_ordinal": len(history),
                 "params": {key: ("***" if key in playbook.secret_param_names else value)
                            for key, value in trial.sample.values.items()},
@@ -1092,48 +1090,52 @@ class ZemiComponent:
                     raise ValueError("optimizer proposed a duplicate ParamSample")
                 started = _timestamp()
                 runs = []
+                report_path = f"sample_trials/{playbook.playbook_id}-sample-{len(history) + 1:04d}.md"
+                sample_trial = resolve_sample_trial(sample_trial_prototype.config, module=playbook,
+                    param_sample=sample, dataset=trial_dataset, execute=execute_item)
                 try:
-                    run_parameters = inspect.signature(sample_trial.run).parameters
-                    if "module" in run_parameters:
-                        runs = sample_trial.run(module=playbook, param_sample=sample, dataset=trial_dataset)
-                    else:
-                        warnings.warn(
-                            "SampleTrial.run(playbook, sample, dataset) is deprecated; use module and param_sample",
-                            DeprecationWarning,
-                            stacklevel=2,
-                        )
-                        runs = sample_trial.run(playbook=playbook, sample=sample, dataset=items)
-                    if "dataset" in inspect.signature(sample_trial.evaluate).parameters:
-                        evaluated = sample_trial.evaluate(runs=runs, dataset=trial_dataset)
-                    else:
-                        warnings.warn(
-                            "SampleTrial.evaluate(runs) is deprecated; accept evaluate(runs, dataset)",
-                            DeprecationWarning,
-                            stacklevel=2,
-                        )
-                        evaluated = sample_trial.evaluate(runs=runs)
+                    runs = sample_trial.run()
+                    evaluated = sample_trial.evaluate(runs)
                     if not isinstance(evaluated, tuple) or len(evaluated) != 3:
                         raise ValueError("SampleTrial.evaluate(runs) must return (metrics, score, feedback)")
                     metrics, score, feedback = evaluated
-                    trial = sample_trial.result(param_sample=sample, runs=runs, score=score, metrics=metrics,
-                                               feedback=feedback, started_at=started, finished_at=_timestamp())
+                    if isinstance(score, bool) or not isinstance(score, (int, float)) or not math.isfinite(score):
+                        raise ValueError("SampleTrial score must be one finite number")
+                    if not isinstance(metrics, Mapping):
+                        raise ValueError("SampleTrial metrics must be a mapping")
+                    normalized = {}
+                    for name, value in metrics.items():
+                        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+                            raise ValueError(f"SampleTrial metric {name!r} must be a finite number")
+                        normalized[str(name)] = float(value)
+                    json.dumps(feedback, ensure_ascii=False, allow_nan=False)
+                    report_text = sample_trial.render_report(runs, normalized, float(score), feedback)
+                    artifacts = {str(run.get("playbook_run_id", index)): run["artifacts"]
+                                 for index, run in enumerate(runs) if isinstance(run, Mapping) and run.get("artifacts")}
+                    trial = SampleTrialResult(sample=sample, runs=list(runs), metrics=normalized,
+                        score=float(score), feedback=feedback, started_at=started,
+                        finished_at=_timestamp(), artifacts=artifacts, report=report_path)
                 except Exception as error:
-                    trial = sample_trial.result(param_sample=sample, runs=runs, score=None, metrics={},
-                                               error=str(error), started_at=started, finished_at=_timestamp())
+                    report_text = f"# Sample Trial Report\n\nError: {error}\n"
+                    trial = SampleTrialResult(sample=sample, runs=list(runs), metrics={}, score=None,
+                        error=str(error), status="failed", started_at=started,
+                        finished_at=_timestamp(), report=report_path)
                 history.append(trial)
-                save_sample(trial)
+                save_sample(trial, report_text)
                 if config.get("mode", "optimize") == "start_only":
                     break
             parent["status"] = "failed" if any(s.error for s in history) else "succeeded"
             best = optimizer.best_param_sample(history)
-            progress_path = self.run_directory / f"sample_trials/{playbook.playbook_id}.optimization.md"
-            progress_path.write_text(optimizer.render_report(history=history, best_param_sample=best), encoding="utf-8")
-            dataset_markdown, detail_documents = trial_dataset.render_report(history=history)
+            dataset_report = trial_dataset.render_report(history=history)
             dataset_path = self.run_directory / f"sample_trials/{playbook.playbook_id}.dataset.md"
-            dataset_path.write_text(dataset_markdown, encoding="utf-8")
-            for relative, content in detail_documents.items():
+            dataset_report.path = dataset_path.name
+            dataset_path.write_text(dataset_report.markdown, encoding="utf-8")
+            for relative, content in dataset_report.details.items():
                 target = self.run_directory / "sample_trials" / relative
                 target.parent.mkdir(parents=True, exist_ok=True); target.write_text(content, encoding="utf-8")
+            progress_path = self.run_directory / f"sample_trials/{playbook.playbook_id}.optimization.md"
+            progress_path.write_text(optimizer.render_report(history=history, best_param_sample=best,
+                dataset_report=dataset_report), encoding="utf-8")
             parent["optimization_report"] = str(progress_path.relative_to(self.run_directory)).replace("\\", "/")
             parent["dataset_report"] = str(dataset_path.relative_to(self.run_directory)).replace("\\", "/")
             if parent["status"] == "failed":

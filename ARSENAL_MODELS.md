@@ -24,6 +24,8 @@ llama.cpp на отдельном порту.
 | `lfm2_700m` | `lfm2-700m` |
 | `lfm2_1_2b` | `lfm2-1.2b` |
 | `ling30_tiny` | `ling-3.0-tiny` |
+| `granite42_8b` | `granite-4.2-8b` |
+| `gemma4_e4b` | `gemma-4-e4b-it` |
 
 ## `llm_curated_set_router_mode.toml`
 
@@ -45,9 +47,15 @@ Managed Arsenal в Router Mode. Один `curated_router` предоставля
 | `lfm2_350m` | `lfm2-350m` |
 | `lfm2_700m` | `lfm2-700m` |
 | `lfm2_1_2b` | `lfm2-1.2b` |
+| `granite42_8b` | `granite-4.2-8b` |
+| `gemma4_e4b` | `gemma-4-e4b-it` |
 
 В Router Mode отсутствует только `ling30_tiny` как отдельный сервер: она
 доступна внутри общего `curated_router`.
+
+K2-Horizon-3.7B пока не входит в рабочие конфигурации: официальный GGUF
+требует поддержку архитектуры K2 Horizon в llama.cpp. Модель можно добавить
+после появления этой поддержки в обычной сборке.
 
 ## Внешние и демонстрационные конфигурации
 

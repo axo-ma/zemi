@@ -2,7 +2,7 @@
 
 from . import arsenal, env, params, playbook, toml
 from .params import ModuleOptimizer, ParamSample, ParamSampler, ParamSpace, PlaybookOptimizer
-from .dataset import TrialDataset
+from .dataset import TableDetectionTrialDataset, TrialDataset
 from .sample_trial import SampleTrial, TableDetectionSampleTrial
 from .inputs import InputStore
 from .component import ComponentReport, Module, Playbook, ZemiComponent
@@ -22,6 +22,7 @@ __all__ = [
     "PlaybookOptimizer",
     "ModuleOptimizer",
     "TrialDataset",
+    "TableDetectionTrialDataset",
     "SampleTrial",
     "TableDetectionSampleTrial",
     "InputStore",

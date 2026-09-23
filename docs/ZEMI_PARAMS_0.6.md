@@ -66,18 +66,21 @@ mode = { select = ["optimize", "start_only"] }
 - `optimize` runs the full score-maximizing loop.
 
 `[modules.optimizer.trial_dataset]` owns the dataset path. Its `path` field is
-required for variable Module parameters. `TrialDataset.load(path)` validates the
-flat dataset once before Arsenal starts. The SampleTrial section selects the
-class and holds only its optional `params`.
-`SampleTrial.run(module, param_sample, dataset)` executes once per DatasetItem.
+required for variable Module parameters.
+`TableDetectionTrialDataset(config=trial_dataset).load()` validates the flat
+dataset once before Arsenal starts. The SampleTrial section selects the class
+and holds only its optional `params`. Each parameter sample gets a SampleTrial
+instance constructed with the Module, ParamSample, and dataset.
+`SampleTrial.run()` executes once per DatasetItem.
 Only `DatasetItem.input` and Module params cross the Module boundary.
-`SampleTrial.evaluate(runs, dataset)` sees evaluator-only `ground_truth`, optional
+`SampleTrial.evaluate(runs)` sees evaluator-only `ground_truth`, optional
 `description`, and optional `tags`. It returns `(metrics, score, feedback)`. All finite numeric metrics
 are retained, while the optimizer always maximizes the single finite `score`.
-History stores params, runs, per-item metrics, score, optional feedback, errors,
-artifacts, and the individual Sample Trial Report path. SampleTrial renders only
-its own trial; ModuleOptimizer renders Optimization Progress and TrialDataset
-renders the cross-trial item report.
+The runner constructs a `SampleTrialResult` for history from params, runs,
+metrics, score, feedback, errors, artifacts, and the individual Sample Trial
+Report path. SampleTrial renders only its own trial; ModuleOptimizer renders
+Optimization Progress and TableDetectionTrialDataset renders the cross-trial
+item report. Optimization Progress links to the saved dataset report.
 
 ## Dataset item
 

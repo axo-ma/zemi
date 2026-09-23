@@ -7,7 +7,7 @@ import importlib.util
 import json
 import re
 from collections import Counter, defaultdict
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
 from typing import Any, TypedDict
@@ -78,6 +78,31 @@ class TrialDataset:
                 body.append(f"| {ordinal} | {params} | {run.get('status')} | {json.dumps(run.get('prediction'), ensure_ascii=False).replace('|', chr(92)+'|')} | {run.get('metrics', {}).get('f1', 0):.3f} | [Sample Trial](../{Path(trial.report).name}) |")
             details[name] = "\n".join(body) + "\n"
         return "\n".join(rows) + "\n", details
+
+
+@dataclass
+class DatasetReport:
+    markdown: str
+    details: dict[str, str]
+    path: str | None = None
+
+
+class TableDetectionTrialDataset:
+    """One configured table-detection dataset, loaded before optimization."""
+
+    def __init__(self, config: Mapping[str, Any]) -> None:
+        self.config = dict(config)
+        self.items: list[DatasetItem] = []
+        self.source: Path | None = None
+
+    def load(self) -> None:
+        loaded = TrialDataset.load(self.config["path"])
+        self.items = loaded.items
+        self.source = loaded.source
+
+    def render_report(self, history: Sequence[Any]):
+        markdown, details = TrialDataset(self.items, self.source).render_report(history=history)
+        return DatasetReport(markdown, details)
 
 
 def zemi_path(value):

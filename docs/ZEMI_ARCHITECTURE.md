@@ -23,10 +23,12 @@ PlaybookOptimizer, SampleTrial, the trial hierarchy, and reports.
 - Arsenal optionally supplies named model endpoints and client integrations.
 - PlaybookOptimizer exposes `next_param_sample(history)` and
   `best_param_sample(history)` and always maximizes finite numeric score.
-- TrialDataset owns flat dataset loading, validation, and its cross-history report.
+- TableDetectionTrialDataset owns flat table-detection dataset loading,
+  validation, and its cross-history report.
 - SampleTrial owns per-item execution, evaluation, result construction, and one
   individual Sample Trial Report. ModuleOptimizer owns Optimization Progress.
-- `SampleTrial.evaluate(runs, dataset)` returns `(metrics, score, feedback)`.
+- `SampleTrial.evaluate(runs)` returns `(metrics, score, feedback)`; the dataset
+  belongs to that SampleTrial instance.
 
 DSPy or another framework MAY implement a SampleTrial or optimizer, but is not
 part of the universal execution contract.
@@ -49,7 +51,7 @@ complete start-sample trial; `mode = "optimize"` runs the full loop.
 
 `JobTrial → ModuleTrial → SampleTrial → ModuleRun`
 
-Each Run is the intersection of a SampleTrial and DatasetItem. SampleTrial evaluates after its Module runs are collected. Its result stores
+Each Run is the intersection of a SampleTrial and DatasetItem. SampleTrial evaluates after its Module runs are collected. The runner constructs a SampleTrialResult that stores
 the sample, runs, finite scalar score, complete finite metrics, optional JSON
 feedback, statuses, timestamps, failures, and artifacts. Reports preserve those
 values, descending score ranking, best params, and optimizer configuration.
@@ -57,8 +59,10 @@ values, descending score ranking, best params, and optimizer configuration.
 ## SampleTrial extension boundary
 
 Canonical configuration selects a class via `@comp/path.py:ClassName`. The class
-MUST inherit SampleTrial and implement `load_dataset`, `run`, `evaluate`,
-`result`, and `render_report`. Absolute paths, external entry points, arbitrary
+MUST inherit SampleTrial and provide `run`, `evaluate`, and `render_report`;
+inherited implementations may be used. The framework constructs the result;
+custom trials do not
+implement `result`. Absolute paths, external entry points, arbitrary
 module imports, and expression evaluation are forbidden. See
 [Dataset optimization](DATASET_OPTIMIZATION.md).
 
