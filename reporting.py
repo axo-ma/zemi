@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import html
 import json
 import os
 import re
@@ -11,12 +12,18 @@ from urllib.parse import quote
 from collections.abc import Mapping, Sequence
 
 
+class _Markdown(str):
+    """A link assembled by the renderer, already escaped for a Markdown cell."""
+
+
 def _cell(value):
+    if isinstance(value, _Markdown):
+        return str(value)
     if value is None:
         return "—"
     if isinstance(value, (dict, list, tuple)):
         value = json.dumps(value, ensure_ascii=False, sort_keys=True)
-    return str(value).replace("|", "\\|").replace("\n", " ")
+    return html.escape(str(value), quote=False).replace("|", "\\|").replace("\n", " ")
 
 
 def _table(headers, rows):
@@ -26,7 +33,7 @@ def _table(headers, rows):
 
 
 def _link(label, href):
-    return f"[{_cell(label)}]({href})" if href else _cell(label)
+    return _Markdown(f"[{_cell(label)}]({href})") if href else _cell(label)
 
 
 def _count(rows):
@@ -282,6 +289,9 @@ class DefaultReportRenderer:
     def render_module_optimization_config(self, *, config, space, dataset_ref=None, writer=None, module_id=None, item_count=None):
         rows = [("Optimizer", config.get("strategy")), ("Mode", config.get("mode")),
                 ("Maximum trials", config.get("max_trials")), ("Dataset items", item_count)]
+        for setting in ("seed", "blocks"):
+            if setting in config:
+                rows.append((setting.title(), config[setting]))
         if dataset_ref and writer:
             rows.append(("Dataset", _link("Dataset Report", writer.href(writer.ref("module", module_id), dataset_ref))))
         text = "## Configuration\n\n" + _table(("Setting", "Value"), rows)

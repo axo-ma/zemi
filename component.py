@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import copy
-import html
 import itertools
 import json
 import math
@@ -519,14 +518,11 @@ def _summarize_trials(trials: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
 
 
 class ComponentReport:
-    """Canonical JSON report with HTML and Markdown renderings."""
+    """Canonical JSON execution snapshot; Markdown is owned by ReportWriter."""
 
     def __init__(self, component_name: str, component_root: Path, run_directory: Path, params_file: str, pipeline_params: Mapping[str, Any]) -> None:
         self.path = run_directory / "report.json"
-        self.main_path = run_directory / "main.md"
-        self.markdown_path = run_directory / "report.md"
         self.run_directory = run_directory
-        self._sample_trial_markdown: dict[str, str] = {}
         self._secret_values: set[str] = set()
         trials: list[dict[str, Any]] = []
         self.data: dict[str, Any] = {"schema_version": 1, "component_name": component_name, "component_root": str(component_root), "params_file": params_file, "pipeline_params": copy.deepcopy(dict(pipeline_params)), "started_at": _timestamp(), "finished_at": None, "status": "running", "trials": trials, "playbooks": trials, "summary": {}}
@@ -538,7 +534,7 @@ class ComponentReport:
                 if str(input_params[name]):
                     self._secret_values.add(str(input_params[name]))
                 input_params[name] = "***"
-        entry = {"trial_id": playbook.trial_id, "playbook_name": playbook.playbook_name, "arsenal": playbook.arsenal_id, "input_params": input_params, "resolved_params": copy.deepcopy(playbook.resolved_params), "output_params": {}, "output_notebook": playbook.output_relative.as_posix(), "output_html": playbook.output_html_relative.as_posix(), "output_markdown": playbook.output_markdown_relative.as_posix(), "output_path": playbook.output_relative.as_posix(), "started_at": _timestamp(), "finished_at": None, "duration_seconds": None, "status": "running", "error": None}
+        entry = {"trial_id": playbook.trial_id, "playbook_name": playbook.playbook_name, "arsenal": playbook.arsenal_id, "input_params": input_params, "resolved_params": copy.deepcopy(playbook.resolved_params), "output_params": {}, "output_notebook": playbook.output_relative.as_posix(), "output_html": playbook.output_html_relative.as_posix(), "output_path": playbook.output_relative.as_posix(), "started_at": _timestamp(), "finished_at": None, "duration_seconds": None, "status": "running", "error": None}
         self.data["trials"].append(entry)
         self.save()
         return entry
@@ -558,11 +554,6 @@ class ComponentReport:
     def record_failure(self, error: BaseException) -> None:
         self.data["status"] = "failed"; self.data["error"] = _error_data(error); self.save()
 
-    def set_sample_trial_markdown(self, playbook_id: str, markdown: str) -> None:
-        for secret in self._secret_values:
-            markdown = markdown.replace(secret, "***")
-        self._sample_trial_markdown[playbook_id] = markdown
-
     def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         if "job_trial" in self.data:
@@ -572,34 +563,6 @@ class ComponentReport:
         json_tmp = self.path.with_name(".report.json.tmp")
         json_tmp.write_text(json.dumps(rendered_data, ensure_ascii=False, indent=2, allow_nan=False) + "\n", encoding="utf-8")
         os.replace(json_tmp, self.path)
-        main_tmp = self.main_path.with_name(".main.md.tmp")
-        main_tmp.write_text(_main_markdown(rendered_data, self._sample_trial_markdown), encoding="utf-8")
-        os.replace(main_tmp, self.main_path)
-        markdown_tmp = self.markdown_path.with_name(".report.md.tmp")
-        markdown_tmp.write_text(_report_markdown(rendered_data, self._sample_trial_markdown), encoding="utf-8")
-        os.replace(markdown_tmp, self.markdown_path)
-        for trial in rendered_data["trials"]:
-            relative = trial.get("output_markdown")
-            if not relative:
-                continue
-            output_path = self.run_directory / relative
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            output_tmp = output_path.with_name(f".{output_path.name}.tmp")
-            output_tmp.write_text(_trial_markdown(trial), encoding="utf-8")
-            os.replace(output_tmp, output_path)
-        for trial in rendered_data.get("job_trial", {}).get("playbook_trials", []):
-            relative = trial.get("report_markdown")
-            if not relative:
-                continue
-            output_path = self.run_directory / relative
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            output_tmp = output_path.with_name(f".{output_path.name}.tmp")
-            section = self._sample_trial_markdown.get(trial["playbook_id"], "")
-            document = {"job_trial": {"playbook_trials": [trial]}}
-            output_tmp.write_text(f"# {trial['playbook_id']} SampleTrial report\n" +
-                                  _sampling_markdown(document, {trial["playbook_id"]: section}),
-                                  encoding="utf-8")
-            os.replace(output_tmp, output_path)
         if hasattr(self, "reporting"):
             self.reporting.refresh()
 
@@ -640,12 +603,12 @@ class Playbook(Module):
         if not self.source_path.is_file():
             raise FileNotFoundError(f"Playbook notebook was not found: {self.source_path}")
         self.trial_id = _trial_id(self.playbook_name, config_index, trial_index)
+        if self.module_id is None:
+            self.module_id = self.trial_id
         self.output_relative = Path("notebooks") / f"{self.trial_id}.ipynb"
         self.output_path = component.run_directory / self.output_relative
         self.output_html_relative = self.output_relative.with_suffix(".html")
         self.output_html_path = component.run_directory / self.output_html_relative
-        self.output_markdown_relative = self.output_relative.with_suffix(".report.md")
-        self.output_markdown_path = component.run_directory / self.output_markdown_relative
 
     def run(self) -> None:
         import papermill
@@ -1017,7 +980,6 @@ class ZemiComponent:
         )
         parent = {"playbook_trial_id": playbook.playbook_id, "playbook_id": playbook.playbook_id,
                   "arsenal": playbook.arsenal_id,
-                  "report_markdown": f"sample_trials/{playbook.playbook_id}.summary.md",
                   "optimizer": {key: copy.deepcopy(config[key]) for key in ("mode", "strategy", "max_trials", "seed", "blocks") if key in config},
                   "started_at": _timestamp(), "finished_at": None, "status": "running", "samples": [],
                   "ranking": [], "best_sample": None}
@@ -1054,7 +1016,7 @@ class ZemiComponent:
                     entry = next((t for t in reversed(self.report.data["trials"]) if t["trial_id"] == child.trial_id), None)
                     if entry:
                         entry["playbook_run_id"] = record["playbook_run_id"]
-                        record["artifacts"] = {key: entry[key] for key in ("output_notebook", "output_html", "output_markdown")}
+                        record["artifacts"] = {key: entry[key] for key in ("output_notebook", "output_html")}
                 return entry["output_params"]
 
             try:
@@ -1078,10 +1040,7 @@ class ZemiComponent:
             sample_id = f"{playbook.playbook_id}-sample-{len(history):04d}"
             for record in trial.runs:
                 record["sample_trial_id"] = sample_id
-            report_path = trial.report
-            report_file = self.run_directory / report_path
-            report_file.parent.mkdir(parents=True, exist_ok=True)
-            report_file.write_text(report_text, encoding="utf-8")
+            report_path = self.reporting.writer.ref("sample", playbook.module_id, sample_id).path
             parent["samples"].append({"sample_trial_id": sample_id, "proposal_ordinal": len(history),
                 "params": {key: ("***" if key in playbook.secret_param_names else value)
                            for key, value in trial.sample.values.items()},
@@ -1107,9 +1066,9 @@ class ZemiComponent:
                     raise ValueError("optimizer proposed a duplicate ParamSample")
                 started = _timestamp()
                 runs = []
-                report_path = f"sample_trials/{playbook.playbook_id}-sample-{len(history) + 1:04d}.md"
                 active_sample_id = f"{playbook.playbook_id}-sample-{len(history) + 1:04d}"
                 self.reporting.start_sample(playbook.module_id, active_sample_id)
+                report_path = self.reporting.writer.ref("sample", playbook.module_id, active_sample_id).path
                 sample_trial = resolve_sample_trial(sample_trial_prototype.config, module=playbook,
                     param_sample=sample, dataset=trial_dataset, execute=execute_item)
                 active_sample_trial = sample_trial
@@ -1136,7 +1095,7 @@ class ZemiComponent:
                         score=float(score), feedback=feedback, started_at=started,
                         finished_at=_timestamp(), artifacts=artifacts, report=report_path)
                 except Exception as error:
-                    report_text = f"# Sample Trial Report\n\nError: {error}\n"
+                    report_text = f"## Errors\n\nError: {error}\n"
                     trial = SampleTrialResult(sample=sample, runs=list(runs), metrics={}, score=None,
                         error=str(error), status="failed", started_at=started,
                         finished_at=_timestamp(), report=report_path)
@@ -1226,195 +1185,6 @@ class ZemiComponent:
 
 _SERVICE_INPUT_PARAMS = {"arsenal_config_path", "arsenal_start_and_stop_at_job_level"}
 
-
-def _human_label(name: str) -> str:
-    return name.replace("_", " ").strip().capitalize()
-
-
-def _display_value(value: Any) -> str:
-    if isinstance(value, str):
-        return value
-    return json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False)
-
-
-def _output_markdown_table(output_params: Mapping[str, Any]) -> str:
-    if not output_params:
-        return "_No published output._"
-    rows = [
-        "<table>",
-        "<thead><tr><th>Result</th><th>Value</th></tr></thead>",
-        "<tbody>",
-    ]
-    for name, value in output_params.items():
-        label = html.escape(_human_label(name))
-        displayed = _display_value(value)
-        escaped = html.escape(displayed)
-        if not isinstance(value, (str, int, float, bool)) or len(displayed) > 100 or "\n" in displayed:
-            rendered = (
-                f"<details><summary>Show value ({len(displayed)} characters)</summary>"
-                f"<pre>{escaped}</pre></details>"
-            )
-        else:
-            rendered = f"<code>{escaped}</code>"
-        rows.append(f"<tr><td>{label}</td><td>{rendered}</td></tr>")
-    rows.extend(("</tbody>", "</table>"))
-    return "\n".join(rows)
-
-
-def _trial_summary_text(trial: Mapping[str, Any]) -> str:
-    parts = [str(trial.get("trial_id") or trial.get("playbook_name") or "Trial")]
-    for name, value in trial.get("input_params", {}).items():
-        if name in _SERVICE_INPUT_PARAMS or not isinstance(value, (str, int, float, bool)):
-            continue
-        parts.append(f"{_human_label(name)}: {_display_value(value)}")
-    parts.append(f"Status: {trial.get('status', 'unknown')}")
-    duration = trial.get("duration_seconds")
-    if isinstance(duration, (int, float)):
-        parts.append(f"Duration: {_format_duration(duration)}")
-    return " · ".join(parts)
-
-
-def _trial_markdown(trial: Mapping[str, Any]) -> str:
-    title = html.escape(str(trial.get("trial_id") or trial.get("playbook_name") or "Trial"))
-    summary = html.escape(_trial_summary_text(trial))
-    links = []
-    for field, label in (("output_html", "Executed notebook HTML"), ("output_notebook", "Executed notebook")):
-        target = trial.get(field)
-        if target:
-            links.append(f"[{label}]({Path(str(target)).name})")
-    lines = [f"# {title} output", "", summary, ""]
-    if links:
-        lines.extend((" · ".join(links), ""))
-    lines.extend(("## Published output", "", _output_markdown_table(trial.get("output_params", {})), ""))
-    if trial.get("error"):
-        lines.extend(("## Error", "", f"```json\n{_display_value(trial['error'])}\n```", ""))
-    return "\n".join(lines)
-
-
-def _markdown_cell(value: Any) -> str:
-    displayed = _display_value(value).replace("\r\n", "\n").replace("\r", "\n")
-    return displayed.replace("|", "\\|").replace("\n", "<br>")
-
-
-def _markdown_link(label: str, target: object) -> str:
-    return f"[{label}]({str(target).replace(' ', '%20')})"
-
-
-def _main_markdown(data: Mapping[str, Any], domain_sections: Mapping[str, str] | None = None) -> str:
-    trials = data.get("trials") or data.get("playbooks") or []
-    lines = [
-        "# ZEMI job report",
-        "",
-        "## Overview",
-        "",
-        "| Property | Value |",
-        "|---|---|",
-    ]
-    overview = (
-        ("Component", data.get("component_name")),
-        ("Parameters", data.get("params_file")),
-        ("Status", data.get("status")),
-        ("Started", data.get("started_at")),
-        ("Finished", data.get("finished_at")),
-    )
-    lines.extend(f"| {name} | {_markdown_cell(value)} |" for name, value in overview)
-    input_names = sorted({
-        name
-        for trial in trials
-        for name, value in trial.get("input_params", {}).items()
-        if name not in _SERVICE_INPUT_PARAMS and isinstance(value, (str, int, float, bool))
-    })
-    headers = ["Run", *(_human_label(name) for name in input_names), "Outputs", "Status", "Duration"]
-    lines.extend(("", "## Runs", "", "| " + " | ".join(headers) + " |", "|" + "---|" * len(headers)))
-    for trial in trials:
-        trial_id = str(trial.get("trial_id") or trial.get("playbook_name") or "Trial")
-        notebook_target = trial.get("output_html") or trial.get("output_notebook") or trial.get("output_path")
-        run_cell = _markdown_link(trial_id, notebook_target) if notebook_target else trial_id
-        values = [run_cell]
-        values.extend(_markdown_cell(trial.get("input_params", {}).get(name, "")) for name in input_names)
-        output_target = trial.get("output_markdown")
-        values.append(_markdown_link("Open outputs", output_target) if output_target else "")
-        values.append(_markdown_cell(trial.get("status", "")))
-        duration = trial.get("duration_seconds")
-        values.append(_format_duration(duration) if isinstance(duration, (int, float)) else "")
-        lines.append("| " + " | ".join(values) + " |")
-    if not trials:
-        lines.append("| _No runs_ |" + " |" * (len(headers) - 1))
-    counts = data.get("summary", {}).get("counts", {})
-    lines.extend((
-        "",
-        "## Summary",
-        "",
-        "[Open consolidated outputs](report.md)",
-        "",
-        "| Total | Succeeded | Failed | Running |",
-        "|---:|---:|---:|---:|",
-        f"| {counts.get('total', 0)} | {counts.get('succeeded', 0)} | {counts.get('failed', 0)} | {counts.get('running', 0)} |",
-        "",
-        "## Run details",
-        "",
-    ))
-    for trial in trials:
-        summary = html.escape(_trial_summary_text(trial))
-        lines.extend(("<details>", f"<summary>{summary}</summary>", ""))
-        lines.append(f"- Playbook: `{trial.get('playbook_name', '')}`")
-        if trial.get("output_markdown"):
-            lines.append(f"- Outputs: {_markdown_link('open report', trial['output_markdown'])}")
-        if trial.get("resolved_params"):
-            lines.extend(("", "```json", _display_value(trial["resolved_params"]), "```"))
-        lines.extend(("", "</details>", ""))
-    errors = [trial for trial in trials if trial.get("status") == "failed"]
-    lines.extend(("## Errors", ""))
-    if not errors:
-        lines.extend(("No errors.", ""))
-    else:
-        for trial in errors:
-            lines.extend((f"### {trial.get('trial_id', 'Trial')}", "", "```json", _display_value(trial.get("error")), "```", ""))
-    return "\n".join(lines) + _sampling_markdown(data, domain_sections or {})
-
-
-def _report_markdown(data: Mapping[str, Any], domain_sections: Mapping[str, str] | None = None) -> str:
-    lines = [
-        f"# {html.escape(str(data.get('component_name', 'ZEMI')))} outputs",
-        "",
-        "[Open main job report](main.md)",
-        "",
-    ]
-    trials = data.get("trials") or data.get("playbooks") or []
-    if not trials:
-        lines.extend(("_No runs._", ""))
-    for trial in trials:
-        summary = html.escape(_trial_summary_text(trial))
-        target = trial.get("output_markdown")
-        lines.extend(("<details>", f"<summary>{summary}</summary>", ""))
-        if target:
-            lines.extend((f"[Open individual output report]({target})", ""))
-        lines.extend((_output_markdown_table(trial.get("output_params", {})), "", "</details>", ""))
-    return "\n".join(lines) + _sampling_markdown(data, domain_sections or {})
-
-
-def _sampling_markdown(data, domain_sections):
-    lines = []
-    for trial in data.get("job_trial", {}).get("playbook_trials", []):
-        lines.extend(("", f"## Optimization: {_markdown_cell(trial['playbook_id'])}", "",
-                      (_markdown_link("Open detailed SampleTrial report", trial["report_markdown"])
-                       if trial.get("report_markdown") else ""), "",
-                      "Optimizer:", "", "```json", _display_value(trial.get("optimizer", {})), "```", "",
-                      f"Best sample: `{trial['best_sample']}`", "",
-                      "Ranking: " + ", ".join(trial["ranking"]), ""))
-        for sample in trial["samples"]:
-            lines.extend((f"### {sample['sample_trial_id']}", "", f"Status: {sample['status']}", "",
-                          "Parameters:", "", "```json", _display_value(sample["params"]), "```", "",
-                          f"Score: `{sample.get('score')}`", "",
-                          "Metrics:", "", _output_markdown_table(sample["metrics"]), ""))
-            if sample["error"]:
-                lines.extend(("Error: " + html.escape(sample["error"]), ""))
-            lines.extend(("", "<details><summary>All PlaybookRuns and feedback</summary>", "",
-                          "```json", _display_value({"runs": sample["runs"], "feedback": sample["feedback"]}), "```", "", "</details>", ""))
-        section = domain_sections.get(trial["playbook_id"])
-        if section:
-            lines.extend(("", section, ""))
-    return "\n".join(lines)
 
 def _params_table(params: Mapping[str, Any], name: str) -> dict[str, Any]:
     value = params.get(name, {})
