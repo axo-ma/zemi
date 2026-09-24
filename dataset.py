@@ -6,7 +6,7 @@ import hashlib
 import importlib.util
 import json
 import re
-from collections import Counter, defaultdict
+from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
@@ -101,8 +101,20 @@ class TableDetectionTrialDataset:
         self.source = loaded.source
 
     def render_report(self, history: Sequence[Any]):
-        markdown, details = TrialDataset(self.items, self.source).render_report(history=history)
-        return DatasetReport(markdown, details)
+        writer = getattr(self, "_report_writer", None)
+        module_id = getattr(self, "_report_module_id", None)
+        if writer is None:
+            markdown, details = TrialDataset(self.items, self.source).render_report(history=history)
+            return DatasetReport(markdown, details)
+        from .reporting import DefaultReportRenderer
+        return DefaultReportRenderer().render_trial_dataset(dataset=self, history=history,
+            writer=writer, module_id=module_id)
+
+    def render_worksheet_detection_report(self, item, history):
+        from .reporting import DefaultReportRenderer
+        return DefaultReportRenderer().render_worksheet_detection_report(
+            dataset=self, item=item, history=history, writer=self._report_writer,
+            module_id=self._report_module_id)
 
 
 def zemi_path(value):
@@ -160,14 +172,14 @@ def _scores(tp, fp, fn):
 
 
 def table_evaluator(trial, *, params):
-    """One-to-one exact boundaries; duplicate predictions count as FP."""
+    """Evaluate validated table ranges as sets, irrespective of order or repetition."""
     details = []
     tags = defaultdict(lambda: [0, 0, 0])
     total = [0, 0, 0]
     errors = empty = empty_correct = 0
     for run in trial.runs:
         item = run["item"]
-        truth = Counter(item["ground_truth"])
+        truth = set(item["ground_truth"])
         execution_error = run.get("error")
         diagnostic = None
         prediction = run.get("prediction")
@@ -176,18 +188,18 @@ def table_evaluator(trial, *, params):
                 raise ValueError(str(execution_error))
             if not isinstance(prediction, dict) or not isinstance(prediction.get("ranges"), list):
                 raise ValueError("Prediction must be an object with ranges array")
-            found = Counter(exact_range(value) for value in prediction["ranges"])
+            found = {exact_range(value) for value in prediction["ranges"]}
         except (TypeError, ValueError) as failure:
             diagnostic = str(failure)
-            found = Counter()
+            found = set()
             run["evaluation_error"] = diagnostic
             run["evaluation_status"] = "penalized"
         else:
             run["evaluation_status"] = "evaluated"
-        tp = sum((truth & found).values())
+        tp = len(truth & found)
         # A failed response is a false detection as well as missing all GT.
         # This penalizes failures on reviewed negative worksheets too.
-        fp, fn = sum(found.values()) - tp + int(bool(diagnostic)), sum(truth.values()) - tp
+        fp, fn = len(found - truth) + int(bool(diagnostic)), len(truth - found)
         errors += bool(diagnostic)
         empty += not bool(truth)
         empty_correct += not truth and not found and not diagnostic

@@ -24,7 +24,7 @@ _ARSENAL_KEYS = {"id", "config_path", "lifecycle", "params"}
 _MODULE_KEYS = {"id", "kind", "path", "arsenal", "enabled", "params", "optimizer"}
 _OPTIMIZER_KEYS = {"mode", "strategy", "max_trials", "max_samples", "seed", "blocks", "sample_trial", "trial_dataset"}
 _TRIAL_KEYS = {"type", "dataset", "params"}
-_TRIAL_DATASET_KEYS = {"path"}
+_TRIAL_DATASET_KEYS = {"path", "type"}
 _LEGACY_TRIAL_KEYS = {"dataset", "evaluator", "objective", "run"}
 _DATASET_KEYS = {"adapter", "path", "params"}
 _EVALUATOR_KEYS = {"adapter", "params"}
@@ -203,6 +203,8 @@ def _validate_optimizer(raw: Any, label: str) -> dict[str, Any]:
         dataset = _table(optimizer["trial_dataset"], f"{label}.trial_dataset")
         _closed(dataset, _TRIAL_DATASET_KEYS, f"{label}.trial_dataset")
         dataset["path"] = _path(dataset.get("path"), f"{label}.trial_dataset.path")
+        if "type" in dataset and (not isinstance(dataset["type"], str) or not re.fullmatch(r"@comp/[^:]+\.py:[A-Za-z_][A-Za-z0-9_]*", dataset["type"])):
+            raise ValueError(f"{label}.trial_dataset.type must be @comp/path.py:ClassName")
         optimizer["trial_dataset"] = dataset
     if "sample_trial" not in optimizer:
         return optimizer
@@ -546,6 +548,18 @@ class PlaybookOptimizer:
             if best: values = [f"**{value}**" for value in values]
             lines.append("| " + " | ".join(values) + " |")
         return "\n".join(lines) + "\n"
+
+    def render_optimization_progress(self, *, history: Sequence[SampleTrialResult],
+                                     best_param_sample: ParamSample | None) -> str:
+        """Explain optimizer state without duplicating the samples table."""
+        if not history:
+            return "No optimization progress details available."
+        selected = next((index for index, result in enumerate(history, 1)
+                         if best_param_sample is not None and result.sample.key() == best_param_sample.key()), None)
+        message = f"{len(history)} sample(s) evaluated using {self.strategy}."
+        if selected is not None:
+            message += f" Sample {selected} has the best available score."
+        return message
 
 
 ModuleOptimizer = PlaybookOptimizer

@@ -600,6 +600,8 @@ class ComponentReport:
                                   _sampling_markdown(document, {trial["playbook_id"]: section}),
                                   encoding="utf-8")
             os.replace(output_tmp, output_path)
+        if hasattr(self, "reporting"):
+            self.reporting.refresh()
 
 
 class Module:
@@ -954,11 +956,14 @@ class ZemiComponent:
             self._arsenal_groups.append((managed, arsenal_config_path, tuple(group_playbooks)))
         self.modules = tuple(playbooks)
         self.playbooks = self.modules  # compatibility alias
+        from .reporting import JobReporting
+        self.reporting = JobReporting(self)
+        self.report.reporting = self.reporting
         self._closed = False; self.report.save()
 
     def _prepare_sample_trials(self):
         from .dataset import TableDetectionTrialDataset
-        from .sample_trial import resolve_sample_trial
+        from .sample_trial import resolve_sample_trial, _load_custom
         prepared = {}
         for playbook in self.playbooks:
             if not playbook.enabled or playbook.optimizer_config is None:
@@ -966,7 +971,12 @@ class ZemiComponent:
             config = playbook.optimizer_config["sample_trial"]
             try:
                 sample_trial = resolve_sample_trial(config, execute=lambda **kwargs: {})
-                trial_dataset = TableDetectionTrialDataset(config=playbook.optimizer_config["trial_dataset"])
+                dataset_config = playbook.optimizer_config["trial_dataset"]
+                dataset_class = (_load_custom(dataset_config["type"]) if dataset_config.get("type")
+                                 else TableDetectionTrialDataset)
+                if not issubclass(dataset_class, TableDetectionTrialDataset):
+                    raise ValueError("trial_dataset.type must inherit TableDetectionTrialDataset")
+                trial_dataset = dataset_class(config=dataset_config)
                 trial_dataset.load()
                 items = trial_dataset.items
                 if not items:
@@ -1012,7 +1022,10 @@ class ZemiComponent:
                   "started_at": _timestamp(), "finished_at": None, "status": "running", "samples": [],
                   "ranking": [], "best_sample": None}
         self.report.data.setdefault("job_trial", {"job_trial_id": self.run_directory.name, "playbook_trials": []})["playbook_trials"].append(parent)
+        self.reporting.register_dataset(playbook.module_id, trial_dataset)
         serial = 0
+        active_sample_id = None
+        active_sample_trial = None
 
         def execute_item(*, playbook, sample, item, context, runner=None, runner_params=None):
             nonlocal serial
@@ -1024,6 +1037,7 @@ class ZemiComponent:
                       "playbook_run_id": f"{playbook.playbook_id}-run-{serial:06d}",
                       "dataset_item_id": item.get("id"), "item": copy.deepcopy(item),
                       "prediction": None, "error": None, "started_at": started, "status": "running"}
+            self.reporting.write_run(playbook.module_id, active_sample_id, record, active_sample_trial)
 
             def execute(inputs):
                 params = copy.deepcopy(dict(sample.values))
@@ -1055,6 +1069,7 @@ class ZemiComponent:
             except Exception as error:
                 record.update(error=_error_data(error), status="failed")
             record["finished_at"] = _timestamp()
+            self.reporting.write_run(playbook.module_id, active_sample_id, record, active_sample_trial)
             return record
 
         history = []
@@ -1083,6 +1098,8 @@ class ZemiComponent:
             self.report.save()  # Persist the generic result before domain rendering.
             best = optimizer.best_param_sample(history)
             self.report.save()
+            self.reporting.finish_sample(playbook.module_id, sample_id, report_text)
+            self.reporting.update_dataset(playbook.module_id, trial_dataset, history)
 
         try:
             while (sample := optimizer.next_param_sample(history)) is not None:
@@ -1091,8 +1108,11 @@ class ZemiComponent:
                 started = _timestamp()
                 runs = []
                 report_path = f"sample_trials/{playbook.playbook_id}-sample-{len(history) + 1:04d}.md"
+                active_sample_id = f"{playbook.playbook_id}-sample-{len(history) + 1:04d}"
+                self.reporting.start_sample(playbook.module_id, active_sample_id)
                 sample_trial = resolve_sample_trial(sample_trial_prototype.config, module=playbook,
                     param_sample=sample, dataset=trial_dataset, execute=execute_item)
+                active_sample_trial = sample_trial
                 try:
                     runs = sample_trial.run()
                     evaluated = sample_trial.evaluate(runs)
@@ -1121,23 +1141,17 @@ class ZemiComponent:
                         error=str(error), status="failed", started_at=started,
                         finished_at=_timestamp(), report=report_path)
                 history.append(trial)
+                trial.report_sample_id = active_sample_id
                 save_sample(trial, report_text)
                 if config.get("mode", "optimize") == "start_only":
                     break
             parent["status"] = "failed" if any(s.error for s in history) else "succeeded"
             best = optimizer.best_param_sample(history)
-            dataset_report = trial_dataset.render_report(history=history)
-            dataset_path = self.run_directory / f"sample_trials/{playbook.playbook_id}.dataset.md"
-            dataset_report.path = dataset_path.name
-            dataset_path.write_text(dataset_report.markdown, encoding="utf-8")
-            for relative, content in dataset_report.details.items():
-                target = self.run_directory / "sample_trials" / relative
-                target.parent.mkdir(parents=True, exist_ok=True); target.write_text(content, encoding="utf-8")
-            progress_path = self.run_directory / f"sample_trials/{playbook.playbook_id}.optimization.md"
-            progress_path.write_text(optimizer.render_report(history=history, best_param_sample=best,
-                dataset_report=dataset_report), encoding="utf-8")
-            parent["optimization_report"] = str(progress_path.relative_to(self.run_directory)).replace("\\", "/")
-            parent["dataset_report"] = str(dataset_path.relative_to(self.run_directory)).replace("\\", "/")
+            parent["dataset_report"] = self.reporting.writer.ref("dataset", playbook.module_id).path
+            self.reporting.writer.write_module_optimization_progress(playbook.module_id,
+                self.reporting.renderer.render_module_optimization_progress(
+                    mode=config.get("mode", "optimize"),
+                    detail=optimizer.render_optimization_progress(history=history, best_param_sample=best)))
             if parent["status"] == "failed":
                 raise ValueError(f"PlaybookTrial {playbook.playbook_id}: SampleTrial failed; see report")
         except Exception:

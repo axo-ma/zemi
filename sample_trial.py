@@ -36,10 +36,14 @@ class SampleTrial:
         raise NotImplementedError
 
     def render_report(self, runs, metrics, score, feedback) -> str:
-        return "\n".join(("# Sample Trial Report", "", "## Param Sample", "", "```json",
-            json.dumps(self.param_sample.values, ensure_ascii=False, indent=2), "```", "", f"Score: `{score}`", "",
-            "## Metrics", "", "```json", json.dumps(metrics, ensure_ascii=False, indent=2), "```", "",
-            "## Runs and feedback", "", "```json", json.dumps({"runs": runs, "feedback": feedback}, ensure_ascii=False, indent=2), "```", ""))
+        from .reporting import DefaultReportRenderer
+        return DefaultReportRenderer().render_sample_trial(sample_trial=self, runs=runs,
+            metrics=metrics, score=score, feedback=feedback)
+
+    def render_run_report(self, run, *, writer=None, module_id=None, sample_id=None) -> str:
+        from .reporting import DefaultReportRenderer
+        return DefaultReportRenderer().render_run_report(run=run, writer=writer,
+            module_id=module_id, sample_id=sample_id)
 
 
 class TableDetectionSampleTrial(SampleTrial):
