@@ -6,6 +6,7 @@ import html
 import json
 import os
 import re
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote
@@ -38,6 +39,18 @@ def _link(label, href):
 
 def _count(rows):
     return f"{sum(row.get('status') == 'succeeded' for row in rows)} / {len(rows)}"
+
+
+def _replace_report(tmp: Path, target: Path) -> None:
+    """Keep replacement atomic while tolerating brief Windows file locks."""
+    for attempt, delay in enumerate((0.02, 0.05, 0.1, 0.2, 0.4, 0.8, 1.0, 1.0, 1.0)):
+        try:
+            os.replace(tmp, target)
+            return
+        except PermissionError as error:
+            if getattr(error, "winerror", None) not in {5, 32, 33} or attempt == 8:
+                raise
+            time.sleep(delay)
 
 
 @dataclass(frozen=True)
@@ -132,6 +145,8 @@ class ReportWriter:
 
     def register_run(self, module_id, run_id, *, sample_id=None):
         key = ("run", module_id, run_id)
+        if key in self._refs:
+            return self._refs[key]
         ref = self._register(key, "runs/", f"{module_id}.run-{run_id}")
         self._parents[key] = sample_id
         self._save(key)
@@ -165,7 +180,11 @@ class ReportWriter:
             raise TypeError("md_fragment must be a Markdown string")
         for secret in sorted(self._secrets, key=len, reverse=True):
             content = content.replace(secret, "***")
-        self._fragments.setdefault(key, {})[fragment] = content.strip()
+        content = content.strip()
+        fragments = self._fragments.setdefault(key, {})
+        if fragments.get(fragment) == content and (self.root / self._refs[key].path).is_file():
+            return self._refs[key]
+        fragments[fragment] = content
         self._save(key)
         return self._refs[key]
 
@@ -212,7 +231,7 @@ class ReportWriter:
             body.extend((fragments.get(name) or ("Pending." if name not in {"module_errors", "module_artifact_links"} else ""), ""))
         tmp = target.with_name(f".{target.name}.tmp")
         tmp.write_text("\n".join(body).rstrip() + "\n", encoding="utf-8")
-        os.replace(tmp, target)
+        _replace_report(tmp, target)
 
     def write_job_header(self, md_fragment): return self._write(("job",), "job_header", md_fragment)
     def write_module_summary(self, md_fragment): return self._write(("job",), "module_summary", md_fragment)
@@ -550,13 +569,14 @@ class JobReporting:
         self.writer.write_sample_trial(module_id, sample_id, "Sample execution in progress.")
         self.refresh()
 
-    def write_run(self, module_id, sample_id, run, sample_trial):
+    def write_run(self, module_id, sample_id, run, sample_trial, *, refresh=True):
         rid = run["run_id"]
         self._sample_trials[(module_id, sample_id)] = sample_trial
         self.writer.register_run(module_id, rid, sample_id=sample_id)
         self.writer.write_run_report(module_id, rid, sample_trial.render_run_report(
             run, writer=self.writer, module_id=module_id, sample_id=sample_id), sample_id=sample_id)
-        self.refresh()
+        if refresh:
+            self.refresh()
 
     def finish_sample(self, module_id, sample_id, text):
         self.writer.write_sample_trial(module_id, sample_id, text)
@@ -568,7 +588,7 @@ class JobReporting:
             sample_trial = self._sample_trials.get((module_id, sample_id))
             if sample_trial:
                 for run in trial.runs:
-                    self.write_run(module_id, sample_id, run, sample_trial)
+                    self.write_run(module_id, sample_id, run, sample_trial, refresh=False)
         fragment = dataset.render_report(history)
         self.writer.write_trial_dataset(module_id, fragment.markdown if hasattr(fragment, "markdown") else fragment)
         for item in dataset.items:
