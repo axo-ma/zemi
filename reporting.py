@@ -17,13 +17,25 @@ class _Markdown(str):
     """A link assembled by the renderer, already escaped for a Markdown cell."""
 
 
+def _report_value(value):
+    if isinstance(value, float):
+        return round(value, 3)
+    if isinstance(value, dict):
+        return {key: _report_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_report_value(item) for item in value]
+    return value
+
+
 def _cell(value):
     if isinstance(value, _Markdown):
         return str(value)
     if value is None:
         return "—"
     if isinstance(value, (dict, list, tuple)):
-        value = json.dumps(value, ensure_ascii=False, sort_keys=True)
+        value = json.dumps(_report_value(value), ensure_ascii=False, sort_keys=True)
+    elif isinstance(value, float):
+        value = f"{value:.3f}"
     return html.escape(str(value), quote=False).replace("|", "\\|").replace("\n", " ")
 
 
