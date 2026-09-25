@@ -88,6 +88,9 @@ are located directly in the expected roots.
 
 ## Library documentation
 
+- Keep the Windows Unicode console setup in `zemi/__init__.py` working for
+  redirected stdout and stderr. ZEMI entry points should not require callers
+  to set `PYTHONUTF8` or repeat console setup in each job.
 - Store specifications for ZEMI library behavior under `docs/` in this library
   repository.
 - Store complete, machine-readable usage examples under `examples/` in this
