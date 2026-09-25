@@ -387,13 +387,25 @@ class DefaultReportRenderer:
     def render_module_runs_summary(self, *, samples, writer, module_id):
         source = writer.ref("module_runs", module_id)
         parts = ["## Runs"]
+        output_names = list(dict.fromkeys(
+            name for sample in samples for run in sample.get("runs", [])
+            for name in run.get("report_output_keys", [])))
+        output_labels = {"lm_time": "LM Time", "item_tokens": "Item Tokens",
+                         "prompt_tokens": "Prompt Tokens"}
+        output_header = "Outputs<br>" + (" / ".join(output_labels.get(name, name) for name in output_names) or "—")
         for number, sample in enumerate(samples, 1):
             sid = sample["id"]
-            parts.append(f"### Sample {number}\n\nSample ID: `{sid}`")
+            sample_link = _link(f"Sample {number}", writer.href(source, writer.ref("sample", module_id, sid)))
+            params = sample.get("params", {})
+            parameters = " / ".join(f"{name} = {_cell(value)}" for name, value in params.items()) or "—"
+            parts.append(f"### {sample_link}\n\nSample ID: `{sid}`\n\n**Parameters:** {parameters}")
             rows = [(_link(run["run_id"], writer.href(source, writer.ref("run", module_id, run["run_id"]))),
-                     _link(number, writer.href(source, writer.ref("sample", module_id, sid))),
-                     run.get("status"), run.get("duration")) for run in sample.get("runs", [])]
-            parts.append(_table(("Run", "Sample", "Status", "Duration"), rows) if rows else "No runs started.")
+                     run.get("status"),
+                     " / ".join(_cell((run.get("prediction") or {}).get(name))
+                                if name in run.get("report_output_keys", []) else "—"
+                                for name in output_names) or "—",
+                     run.get("duration")) for run in sample.get("runs", [])]
+            parts.append(_table(("Run", "Status", output_header, "Duration"), rows) if rows else "No runs started.")
         if not samples: parts.append("No runs started.")
         return "\n\n".join(parts)
 

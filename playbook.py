@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Iterator, Mapping
 
 PLAYBOOK_OUTPUT_MIME = "application/vnd.zemi.playbook-output+json"
+PLAYBOOK_REPORT_MIME = "application/vnd.zemi.playbook-report+json"
 _OUTPUT_DIR_ENV = "ZEMI_PLAYBOOK_OUTPUT_DIR"
 _published = False
 
@@ -79,16 +80,21 @@ def validate_output_params(value: Any) -> dict[str, Any]:
         raise ValueError(f"output_params() requires finite JSON-serializable values: {error}") from error
 
 
-def output_params(value: Mapping[str, Any]) -> None:
+def output_params(value: Mapping[str, Any], *, report: list[str] | None = None) -> None:
     """Publish one structured mapping with a standard notebook fallback."""
     global _published
     if _published:
         raise RuntimeError("output_params() may be called only once per notebook execution")
     normalized = validate_output_params(value)
+    if report is not None and (not isinstance(report, list) or
+                               any(not isinstance(name, str) or name not in normalized for name in report) or
+                               len(report) != len(set(report))):
+        raise ValueError("output_params() report must list distinct output parameter names")
     from IPython.display import display
     display(
         {
             PLAYBOOK_OUTPUT_MIME: normalized,
+            PLAYBOOK_REPORT_MIME: report or [],
             "text/plain": json.dumps(normalized, ensure_ascii=False, indent=2),
         },
         raw=True,
@@ -96,4 +102,4 @@ def output_params(value: Mapping[str, Any]) -> None:
     _published = True
 
 
-__all__ = ["PLAYBOOK_OUTPUT_MIME", "output_dir", "output_params", "output_path"]
+__all__ = ["PLAYBOOK_OUTPUT_MIME", "PLAYBOOK_REPORT_MIME", "output_dir", "output_params", "output_path"]

@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from . import env
-from .playbook import PLAYBOOK_OUTPUT_MIME, _output_context, validate_output_params
+from .playbook import PLAYBOOK_OUTPUT_MIME, PLAYBOOK_REPORT_MIME, _output_context, validate_output_params
 from .params import ParamSample, ParamSpace, PlaybookOptimizer, SampleTrialResult, validate_document
 
 
@@ -618,6 +618,7 @@ class Playbook(Module):
             with _output_context(self.component.run_directory):
                 papermill.execute_notebook(str(self.source_path), str(self.output_path), parameters=copy.deepcopy(self.params), cwd=str(self.component.root), progress_bar=True, log_output=False, stdout_file=sys.stdout, stderr_file=sys.stderr)
             entry["output_params"] = self._extract_output_params()
+            entry["report_output_keys"] = self._extract_report_output_keys()
             entry["timed_cells"] = self._add_cell_timings()
             self._write_html()
         except Exception as error:
@@ -626,6 +627,7 @@ class Playbook(Module):
                 try:
                     if not entry.get("output_params"):
                         entry["output_params"] = self._extract_output_params()
+                        entry["report_output_keys"] = self._extract_report_output_keys()
                 except Exception as output_error:
                     entry["output_error"] = _error_data(output_error)
             try:
@@ -655,6 +657,21 @@ class Playbook(Module):
         if len(found) > 1:
             raise ValueError("Notebook published output_params() more than once")
         return {} if not found else validate_output_params(found[0])
+
+    def _extract_report_output_keys(self) -> list[str]:
+        if not self.output_path.is_file():
+            return []
+        import nbformat
+        notebook = nbformat.read(self.output_path, as_version=4)
+        found = [output.get("data", {})[PLAYBOOK_REPORT_MIME]
+                 for cell in notebook.cells for output in cell.get("outputs", [])
+                 if PLAYBOOK_REPORT_MIME in output.get("data", {})]
+        if len(found) > 1:
+            raise ValueError("Notebook published output_params() more than once")
+        keys = found[0] if found else []
+        if not isinstance(keys, list) or any(not isinstance(key, str) for key in keys):
+            raise ValueError("Notebook report output keys must be a list of strings")
+        return keys
 
     def _print_start(self) -> None:
         line = "═" * 78
@@ -1017,6 +1034,7 @@ class ZemiComponent:
                     if entry:
                         entry["playbook_run_id"] = record["playbook_run_id"]
                         record["artifacts"] = {key: entry[key] for key in ("output_notebook", "output_html")}
+                        record["report_output_keys"] = entry.get("report_output_keys", [])
                 return entry["output_params"]
 
             try:
