@@ -1,7 +1,7 @@
 # Encoding and prompt packages
 
 Result tables display an `encoding_prompt` binding as its `prompt_name` only.
-This applies to Samples, Selected Sample and Review results; Dataset sample
+This applies to Samples and Selected Sample results; Dataset sample
 columns also show the prompt name. Configuration and parameter sections retain
 the complete binding, and stored results and source snapshots are unchanged.
 
@@ -71,9 +71,9 @@ item_text, prompt = build_prompt(
 ZEMI resolves paths with `env.path`, loads the chosen callable and passes the
 format. The function must return text. This helper makes no model calls.
 
-## Review and examples
+## Reproduction and examples
 
-`ZemiComponent.run()` reads configured bindings automatically for Review Reports. Review
+`ZemiComponent.run()` reads configured bindings automatically for Reproduction Reports. Source
 snapshots contain the selected templates, prompt files and encoder source, in
 addition to the job, params, playbook and provenance. No prompt reconstruction
 from experiment-specific Python code is needed.

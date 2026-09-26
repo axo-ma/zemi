@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import importlib.util
-import json
 from types import SimpleNamespace
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
@@ -50,23 +49,11 @@ class TableDetectionSampleTrial(SampleTrial):
     """Built-in exact table-boundary SampleTrial; score defaults to aggregate F1."""
 
     def evaluate(self, runs: Sequence[dict[str, Any]]) -> tuple[Mapping[str, Any], float, Any]:
+        for run in runs:
+            prediction = run.get("prediction")
+            run["comparison_prediction"] = prediction.get("ranges") if isinstance(prediction, Mapping) else None
         metrics, feedback = table_evaluator(SimpleNamespace(runs=runs), params=self.params)
         return metrics, metrics["f1"], feedback
-
-    def render_report(self, runs, metrics, score, feedback) -> str:
-        from .reporting import _report_value
-        lines = [super().render_report(runs, metrics, score, feedback),
-                 "## Table detection", "", "| Worksheet | Ground truth | Prediction | TP | FP | FN | Precision | Recall | F1 | Diagnostic |",
-                 "|---|---|---|---:|---:|---:|---:|---:|---:|---|"]
-        details = feedback.get("items", []) if isinstance(feedback, Mapping) else []
-        for item in details:
-            values = [item.get("input"), item.get("ground_truth"), item.get("prediction"),
-                      *[item.get(key) for key in ("tp", "fp", "fn", "precision", "recall", "f1")], item.get("error")]
-            cells = [json.dumps(_report_value(value), ensure_ascii=False, sort_keys=True).replace("|", "\\|")
-                     for value in values]
-            lines.append("| " + " | ".join(cells) + " |")
-        lines.append("")
-        return "\n".join(lines)
 
 
 class LegacySampleTrial(SampleTrial):

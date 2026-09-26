@@ -1,14 +1,13 @@
 """Deterministic Review Reports with launch-time provenance and prompt snapshots."""
 from __future__ import annotations
 
-import json
 import re
 import subprocess
 import sys
 from pathlib import Path
 from . import env
 from .dataset import zemi_path
-from .reporting import _cell, _table, _summary_params
+from .reporting import _table
 
 
 def _git(directory, *args):
@@ -141,30 +140,10 @@ def render_review(snapshot, *, samples, report, module_id, writer, item_count=No
         code = (f"from zemi.component import ZemiComponent; c = ZemiComponent('@comp/{snapshot['params_file']}'); "
                 "exec('try:\\n    c.run()\\nfinally:\\n    c.close()')")
         commands.append(f'& "../{snapshot["python"]}" -c "{code}"')
-    rows = []
-    for number, sample in enumerate(samples, 1):
-        sruns = sample.get('runs', [])
-        def mean(key):
-            values = [(r.get('prediction') or {}).get(key) for r in sruns]
-            values = [v for v in values if isinstance(v, (float, int)) and not isinstance(v, bool)]
-            return sum(values) / len(values) if values else None
-        sample_id = sample.get('sample_trial_id') or sample.get('sample_id') or sample.get('id') or f'Sample {number}'
-        label = str(sample_id)
-        if sample.get('params'):
-            label += ': ' + json.dumps(_summary_params(sample['params']), ensure_ascii=False, sort_keys=True)
-        rows.append((label, sample.get('score'), mean('item_tokens'), mean('prompt_tokens'),
-                     sum(bool(r.get('evaluation_error')) for r in sruns)))
     parts = ['## Run configuration', _table(('Setting', 'Value'), settings), '## Reproduction',
              'The instance requires the configured Python environment, model and runtime. '
              'Commits describe the checkout at launch; dirty checkouts additionally require the saved source snapshot.',
-             _fence('\n'.join(commands), 'powershell'), '## Results',
-             _table(('Sample / parameters', 'Score', 'Mean item tokens', 'Mean prompt tokens', 'Evaluator errors'), rows),
-             'Score is the SampleTrial score. Token means use available numeric outputs; unavailable values are shown as —.',
-             '## Prompts and examples']
-    for name, prompt in snapshot['prompts'].items():
-        parts += [f'### {name}', _fence(prompt)]
-    if not snapshot['prompts']:
-        parts.append('No prompt templates supplied.')
+             _fence('\n'.join(commands), 'powershell')]
     snapshot_file = Path(writer.ref('review', module_id).path).with_suffix('.json').name
     parts += ['## Source snapshot', 'Launch-time source text and provenance are saved in '
               f'[{snapshot_file}]({snapshot_file}).']

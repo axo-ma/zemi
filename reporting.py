@@ -60,6 +60,72 @@ def _count(rows):
     return f"{sum(row.get('status') == 'succeeded' for row in rows)} / {len(rows)}"
 
 
+def _duration_text(seconds):
+    seconds = max(0, int(round(seconds)))
+    minutes, seconds = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h {minutes:02d}m" if hours else f"{minutes}m {seconds:02d}s"
+
+
+def _mean_output(runs, name):
+    values = [(run.get("prediction") or {}).get(name) for run in runs
+              if isinstance(run.get("prediction"), Mapping)]
+    values = [value for value in values if isinstance(value, (int, float)) and not isinstance(value, bool)]
+    return sum(values) / len(values) if values else None
+
+
+def _comparison(run):
+    return run.get("comparison_prediction", run.get("prediction"))
+
+
+def _exact(run):
+    return (run.get("metrics", {}).get("exact_match") is True and run.get("status") == "succeeded"
+            and not run.get("error") and not run.get("evaluation_error"))
+
+
+def _short_value(value, href=None):
+    cell = _cell(value)
+    if href and len(cell) > 60:
+        return _Markdown(cell[:60] + _link("...", href))
+    return _Markdown(cell)
+
+
+def _prediction_cell(run, href=None):
+    if run.get("error") or run.get("evaluation_error"):
+        return _link("Error", href)
+    if _exact(run):
+        return "✅"
+    return _short_value(_comparison(run), href)
+
+
+def _result_rows(runs, *, writer=None, module_id=None, source=None, include_target=False, include_sample=False):
+    metrics = sorted({key for run in runs for key in run.get("metrics", {})})
+    headers = (["Sample"] if include_sample else ["Item ID"]) + ["Run"]
+    if include_target:
+        headers.append("Target")
+    headers += ["Prediction", "Metrics<br>" + (" / ".join(metrics) or "—"), "Error"]
+    rows = []
+    for run in runs:
+        item_id = run.get("dataset_item_id", (run.get("item") or {}).get("id"))
+        rid = run.get("run_id")
+        item_href = writer.href(source, writer.ref("item", module_id, item_id)) if writer and source else None
+        run_href = writer.href(source, writer.ref("run", module_id, rid)) if writer and source else None
+        if include_sample:
+            sid = run.get("report_sample_id")
+            first = _link(run.get('report_sample_label', f"Sample {run.get('report_sample_number')}"),
+                          writer.href(source, writer.ref("sample", module_id, sid)) if writer and source else None)
+        else:
+            first = _link(item_id, item_href)
+        row = [first, _link(rid, run_href)]
+        if include_target:
+            row.append((run.get("item") or {}).get("ground_truth"))
+        row += [_prediction_cell(run, href=None if include_sample else run_href),
+                " / ".join(_cell(run.get("metrics", {}).get(key)) for key in metrics) or "—",
+                run.get("error") or run.get("evaluation_error")]
+        rows.append(row)
+    return _table(headers, rows) if rows else "No runs available."
+
+
 def _replace_report(tmp: Path, target: Path) -> None:
     """Keep replacement atomic while tolerating brief Windows file locks."""
     for attempt, delay in enumerate((0.02, 0.05, 0.1, 0.2, 0.4, 0.8, 1.0, 1.0, 1.0)):
@@ -148,7 +214,7 @@ class ReportWriter:
         return ref
 
     def register_review(self, module_id):
-        ref = self._register(("review", module_id), "", module_id, ".review.md")
+        ref = self._register(("review", module_id), "", module_id, ".reproduction.md")
         self._save(("review", module_id))
         return ref
 
@@ -230,9 +296,9 @@ class ReportWriter:
         elif key[0] == "dataset":
             title, order = f"Dataset: {self._modules[key[1]]['filename']}", ("trial_dataset",)
         elif key[0] == "item":
-            title, order = f"Worksheet Detection: {key[2]}", ("worksheet_detection_report",)
+            title, order = f"Dataset Item: {key[2]}", ("worksheet_detection_report",)
         elif key[0] == "review":
-            title, order = f"Review: {key[1]}", ("review_report",)
+            title, order = f"Reproduction: {key[1]}", ("review_report",)
         elif key[0] == "sample":
             title, order = f"Sample: {key[2]}", ("sample_trial",)
         else:
@@ -345,7 +411,7 @@ class DefaultReportRenderer:
             rows.append(("Dataset", _link("Dataset Report", writer.href(writer.ref("module", module_id), dataset_ref))))
         text = "## Configuration\n\n" + _table(("Setting", "Value"), rows)
         dimensions = {d.name for d in space.dimensions}
-        text += "\n\n" + _table(("Parameter", "Role", "Value"), ((k, "Variable" if k in dimensions else "Fixed", v) for k, v in space.start.values.items()))
+        text += "\n\n" + _table(("Parameter", "Role", "Value"), ((k, "Variable" if k in dimensions else "Fixed", None if k in dimensions else v) for k, v in space.start.values.items()))
         if config.get("mode") == "start_only": text += "\n\nThe configured search space was not explored."
         return text
 
@@ -359,7 +425,7 @@ class DefaultReportRenderer:
         source = writer.ref("module", module_id)
         metrics = sorted({name for sample in samples for name in sample.get("metrics", {})})
         headers = ("Sample", "Parameters<br>" + (" / ".join(param_names) or "—"), "Score", "Status",
-                   "Metrics<br>" + (" / ".join(metrics) or "—"), "Runs<br>(OK / Total)", "Duration")
+                   "Metrics<br>" + (" / ".join(metrics) or "—"), "Runs<br>(OK / Total)", "Mean item tokens", "Mean prompt tokens", "Duration")
         rows = []
         for number, sample in enumerate(samples, 1):
             sid = sample["id"]
@@ -368,7 +434,8 @@ class DefaultReportRenderer:
                 sample.get("score"), sample.get("status"),
                 " / ".join(_cell(sample.get("metrics", {}).get(k)) for k in metrics) or "—",
                 _link(_count(sample.get("runs", [])), writer.href(source, writer.ref("module_runs", module_id), writer.sample_anchor(sid))),
-                sample.get("duration")))
+                _mean_output(sample.get("runs", []), "item_tokens"),
+                _mean_output(sample.get("runs", []), "prompt_tokens"), sample.get("duration")))
         return "## Samples\n\n" + (_table(headers, rows) if rows else "No samples started.")
 
     def render_module_selected_sample(self, *, selected, samples, mode, writer, module_id):
@@ -396,8 +463,20 @@ class DefaultReportRenderer:
 
     def render_sample_trial(self, *, sample_trial, runs, metrics, score, feedback):
         params = sample_trial.param_sample.values if sample_trial.param_sample else {}
-        return ("## Parameters\n\n" + _table(("Parameter", "Value"), params.items()) + "\n\n## Evaluation\n\n" +
-            _table(("Score", "Metrics", "Feedback"), [(score, metrics, feedback)]))
+        parts = ["## Parameters", _table(("Parameter", "Value"), params.items())]
+        binding = params.get("encoding_prompt")
+        if isinstance(binding, Mapping):
+            prompt = getattr(sample_trial, "_report_prompt", None)
+            if prompt is None:
+                from .prompting import load_prompts
+                prompt = load_prompts(binding["prompt_file"])[binding["prompt_name"]]
+            from .review import _fence
+            parts += ["## Prompt", _fence(prompt)]
+        parts += ["## Evaluation", _table(("Score", "Metrics"), [(score, metrics)]), "## Runs",
+                  _result_rows(runs, writer=getattr(sample_trial, "_report_writer", None),
+                      module_id=getattr(sample_trial, "_report_module_id", None),
+                      source=getattr(sample_trial, "_report_source", None), include_target=True)]
+        return "\n\n".join(parts)
 
     def render_run_report(self, *, run, writer=None, module_id=None, sample_id=None):
         lines = [f"**Status:** {_cell(run.get('status'))}", f"**Dataset item:** {_cell(run.get('dataset_item_id'))}"]
@@ -444,64 +523,51 @@ class DefaultReportRenderer:
         sample_headers = []
         for number, trial in enumerate(history, 1):
             sid = getattr(trial, "report_sample_id", None)
-            label = f"Sample {number}"
             params = trial.sample.values if getattr(trial, "sample", None) else {}
+            label = f"Sample {number}"
             binding = params.get("encoding_prompt")
-            if isinstance(binding, Mapping) and binding.get("prompt_name"):
-                label += f" ({binding['prompt_name']})"
-            elif params.get("encoding_format"):
-                label += f" ({params['encoding_format']})"
+            name = binding.get("prompt_name") if isinstance(binding, Mapping) else params.get("encoding_format")
+            if name:
+                label += f" ({name})"
             sample_headers.append(_link(label, writer.href(source, writer.ref("sample", module_id, sid))))
         rows = []
         for item in dataset.items:
             found = [run for trial in history for run in trial.runs if run.get("dataset_item_id") == item["id"]]
-            ok = sum(run.get("metrics", {}).get("exact_match") is True for run in found)
-            total = len(found)
-            workbook = item.get("input", {}).get("workbook_path")
-            href = writer.artifact_href(source, __import__("zemi.dataset", fromlist=["zemi_path"]).zemi_path(workbook)) if workbook else None
+            comparable = any("exact_match" in run.get("metrics", {}) for run in found)
+            matches = f"{sum(_exact(run) for run in found)} / {len(found)}" if comparable else "—"
+            item_ref = writer.ref("item", module_id, item["id"])
+            href = writer.href(source, item_ref)
             comparisons = []
             for trial in history:
                 runs = [run for run in trial.runs if run.get("dataset_item_id") == item["id"]]
-                if runs and all(run.get("metrics", {}).get("exact_match") is True
-                                and run.get("status") == "succeeded"
-                                and not run.get("error") and not run.get("evaluation_error") for run in runs):
-                    comparisons.append("✅")
-                    continue
-                predictions = [run.get("prediction") for run in runs]
-                ranges = [prediction.get("ranges") if isinstance(prediction, Mapping) else None
-                          for prediction in predictions]
-                actual = "; ".join(json.dumps(value, ensure_ascii=False) if value is not None else "—"
-                                   for value in ranges) if ranges else "—"
-                if len(actual) > 60:
-                    actual = _Markdown(_cell(actual[:60]) + _link("...", writer.href(source, writer.ref("item", module_id, item["id"]))))
-                comparisons.append(actual)
-            rows.append((_link(item["id"], href), _link(f"{ok} / {total}", writer.href(source, writer.ref("item", module_id, item["id"]))),
-                         f"{ok / total:.0%}" if total else "—", item.get("ground_truth"), *comparisons))
-        return (f"**Job run ID:** `{writer.root.name}` · **Items:** {len(dataset.items)} · **Samples:** {len(history)}\n\n" +
-            "## Items\n\nTarget shows the expected result; sample columns show ✅ for exact matches and predictions for mismatches. `[]` means no tables; `—` means no prediction. Long predictions link to the full item report via `...`.\n\n" +
-            _table(("Item ID", "Worksheets detected<br>(OK / Total)", "Worksheet detection rate", "Target", *sample_headers), rows))
+                if not runs:
+                    comparisons.append("—")
+                elif len(runs) == 1:
+                    comparisons.append(_prediction_cell(runs[0], href=href))
+                else:
+                    comparisons.append(_short_value([_comparison(run) for run in runs], href))
+            rows.append((_link(item["id"], href), matches, item.get("ground_truth"), *comparisons))
+        return (f"**Job run ID:** `{writer.root.name}` · **Items:** {len(dataset.items)} · **Samples:** {len(history)}\n\n"
+            "## Items\n\nTarget shows the expected result. ✅ means evaluator-confirmed exact match; — means no prediction. Errors and truncated values link to full item results.\n\n" +
+            _table(("Item ID", "Matches", "Target", *sample_headers), rows))
 
     def render_worksheet_detection_report(self, *, dataset, item, history, writer, module_id):
         source = writer.ref("item", module_id, item["id"])
-        found = [(i, trial, run) for i, trial in enumerate(history, 1) for run in trial.runs if run.get("dataset_item_id") == item["id"]]
-        ok = sum(run.get("metrics", {}).get("exact_match") is True for _, _, run in found)
-        total = len(found)
-        input_data = item.get("input", {})
-        workbook = input_data.get("workbook_path")
-        href = writer.artifact_href(source, __import__("zemi.dataset", fromlist=["zemi_path"]).zemi_path(workbook)) if workbook else None
-        rows = []
-        for number, trial, run in found:
-            sid, rid = getattr(trial, "report_sample_id", None), run.get("run_id")
-            ranges = run.get("prediction", {}).get("ranges") if isinstance(run.get("prediction"), Mapping) else None
-            exact = run.get("metrics", {}).get("exact_match")
-            rows.append((_link(number, writer.href(source, writer.ref("sample", module_id, sid))),
-                _link(rid, writer.href(source, writer.ref("run", module_id, rid))),
-                ranges if ranges is not None else "—", "Error" if run.get("error") or run.get("evaluation_error") else "Yes" if exact else "No"))
-        return (f"**Item ID:** `{item['id']}` · **Workbook:** {_link(Path(workbook).name, href) if workbook else '—'} · "
-                f"**Worksheet:** {_cell(input_data.get('worksheet_name'))}  \n**Job run ID:** `{writer.root.name}`\n\n"
-                f"**Expected ranges:** {_cell(item.get('ground_truth'))}\n\n## Worksheet Detection Summary\n\n"
-                f"Worksheets detected: {ok} / {total} · Worksheet detection rate: {f'{ok / total:.0%}' if total else '—'}\n\n"
-                "## Worksheet Detections\n\n" + (_table(("Sample", "Run", "Prediction", "Exact match"), rows) if rows else "No checks started."))
+        found = []
+        for number, trial in enumerate(history, 1):
+            params = trial.sample.values if getattr(trial, "sample", None) else {}
+            binding = params.get("encoding_prompt")
+            name = binding.get("prompt_name") if isinstance(binding, Mapping) else params.get("encoding_format")
+            label = f"Sample {number}" + (f" ({name})" if name else "")
+            for run in trial.runs:
+                if run.get("dataset_item_id") == item["id"]:
+                    found.append(dict(run, report_sample_id=getattr(trial, "report_sample_id", None),
+                                      report_sample_number=number, report_sample_label=label))
+        return (f"**Item ID:** `{item['id']}` · **Job run ID:** `{writer.root.name}`\n\n"
+                "## Input\n\n" + _table(("Parameter", "Value"), item.get("input", {}).items()) +
+                "\n\n## Target\n\n" + _cell(item.get("ground_truth")) +
+                "\n\n## Results\n\n" + _result_rows(found, writer=writer, module_id=module_id,
+                    source=source, include_sample=True))
 
 
 class JobReporting:
@@ -542,12 +608,12 @@ class JobReporting:
     @staticmethod
     def _duration(data):
         if not data: return None
-        if data.get("duration_seconds") is not None: return f"{data['duration_seconds']:.1f} s"
+        if data.get("duration_seconds") is not None: return _duration_text(data["duration_seconds"])
         try:
             from datetime import datetime
             start = datetime.fromisoformat(data["started_at"])
             end = datetime.fromisoformat(data["finished_at"]) if data.get("finished_at") else datetime.now(start.tzinfo)
-            return f"{(end-start).total_seconds():.1f} s"
+            return _duration_text((end-start).total_seconds())
         except (TypeError, ValueError, KeyError):
             return None
 
@@ -603,7 +669,7 @@ class JobReporting:
                     from .review import render_review
                     writer.write_review_report(mid, render_review(self._reviews[mid], samples=samples,
                         report=report, module_id=mid, writer=writer, item_count=len(dataset.items) if dataset else None))
-                    outputs["Review Report"] = writer.ref("review", mid).path
+                    outputs["Reproduction Report"] = writer.ref("review", mid).path
                 summary.append({"id": mid, "name": Path(module.playbook_name).name, "optimized": True,
                     "mode": module.optimizer_config.get("mode"), "status": status, "samples": samples,
                     "runs": runs, "selected": selected,
@@ -670,6 +736,12 @@ class JobReporting:
     def write_run(self, module_id, sample_id, run, sample_trial, *, refresh=True):
         rid = run["run_id"]
         self._sample_trials[(module_id, sample_id)] = sample_trial
+        sample_trial._report_writer = self.writer
+        sample_trial._report_module_id = module_id
+        sample_trial._report_source = self.writer.ref("sample", module_id, sample_id)
+        binding = sample_trial.param_sample.values.get("encoding_prompt") if sample_trial.param_sample else None
+        if isinstance(binding, Mapping):
+            sample_trial._report_prompt = self._reviews.get(module_id, {}).get("prompts", {}).get(binding.get("prompt_name"))
         self.writer.register_run(module_id, rid, sample_id=sample_id)
         self.writer.write_run_report(module_id, rid, sample_trial.render_run_report(
             run, writer=self.writer, module_id=module_id, sample_id=sample_id), sample_id=sample_id)

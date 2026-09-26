@@ -65,19 +65,34 @@ class TrialDataset:
         return cls(result, source)
 
     def render_report(self, *, history: Sequence[Any]):
-        rows = ["# Trial Dataset Report", "", "| Dataset Item | Runs | Executed | Exact Match | Avg F1 | Best F1 | Details |", "|---|---:|---:|---:|---:|---:|---|"]
-        details = {}
+        from .reporting import DefaultReportRenderer, ReportWriter
+        class MemoryWriter(ReportWriter):
+            def _save(self, key):
+                pass
+        writer = MemoryWriter(env.path.tmp / "standalone-reports")
+        module_id = "dataset"
+        writer.register_module(module_id)
+        writer.register_dataset(module_id)
         for item in self.items:
-            found = [(i, trial, run) for i, trial in enumerate(history, 1) for run in trial.runs if run.get("dataset_item_id") == item["id"]]
-            f1s = [float(run.get("metrics", {}).get("f1", 0)) for _, _, run in found]
-            name = f"dataset-items/{item['id']}.md"
-            rows.append(f"| {item['id']} | {len(found)} | {sum(r.get('status') == 'succeeded' for _,_,r in found)} | {sum(bool(r.get('metrics', {}).get('exact_match')) for _,_,r in found)} | {sum(f1s)/len(f1s) if f1s else 0:.3f} | {max(f1s, default=0):.3f} | [Details]({name}) |")
-            body = [f"# Dataset Item: {item['id']}", "", item.get("description", ""), "", "Ground truth:", "", "```json", json.dumps(item["ground_truth"], ensure_ascii=False, indent=2), "```", "", "| Trial | Param Sample | Status | Prediction | F1 | Sample Trial |", "|---:|---|---|---|---:|---|"]
-            for ordinal, trial, run in found:
-                params = " / ".join(f"{k}={v}" for k, v in trial.sample.values.items())
-                body.append(f"| {ordinal} | {params} | {run.get('status')} | {json.dumps(run.get('prediction'), ensure_ascii=False).replace('|', chr(92)+'|')} | {run.get('metrics', {}).get('f1', 0):.3f} | [Sample Trial](../{Path(trial.report).name}) |")
-            details[name] = "\n".join(body) + "\n"
-        return "\n".join(rows) + "\n", details
+            writer.register_item(module_id, item["id"])
+        from types import SimpleNamespace
+        trials = []
+        for number, trial in enumerate(history, 1):
+            sid = getattr(trial, "report_sample_id", None) or f"sample-{number}"
+            writer.register_sample(module_id, sid)
+            runs = []
+            for index, original in enumerate(trial.runs, 1):
+                rid = original.get("run_id") or f"{sid}-run-{index}"
+                writer.register_run(module_id, rid, sample_id=sid)
+                runs.append(dict(original, run_id=rid))
+            trials.append(SimpleNamespace(sample=trial.sample, report_sample_id=sid, runs=runs))
+        renderer = DefaultReportRenderer()
+        markdown = renderer.render_trial_dataset(dataset=self, history=trials, writer=writer, module_id=module_id)
+        details = {writer.ref("item", module_id, item["id"]).path:
+                   renderer.render_worksheet_detection_report(dataset=self, item=item, history=trials,
+                       writer=writer, module_id=module_id) for item in self.items}
+        return markdown, details
+
 
 
 @dataclass

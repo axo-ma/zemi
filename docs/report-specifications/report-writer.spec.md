@@ -15,7 +15,7 @@ ModuleOptimizer is the optimizer. These names do not represent separate entities
 
 ## 2. Report File Registry
 
-Paths below are relative to the job run directory. Sample Reports reside in `samples/` and Run Reports in `runs/`; they do not reside at the top level. Worksheet Detection Reports reside in `dataset-items/`. Other report files remain at the top level. File naming uses safe, collision-resistant registered references; artifact paths are recorded by ReportWriter rather than reconstructed by clients.
+Paths below are relative to the job run directory. Sample Reports reside in `samples/` and Run Reports in `runs/`; they do not reside at the top level. Dataset Item Reports reside in `dataset-items/`. Other report files remain at the top level. File naming uses safe, collision-resistant registered references; artifact paths are recorded by ReportWriter rather than reconstructed by clients.
 
 | Report type | Filename | Cardinality | Without optimizer | start_only | optimize |
 |---|---|---|---|---|---|
@@ -25,8 +25,8 @@ Paths below are relative to the job run directory. Sample Reports reside in `sam
 | Sample Report | `samples/<sample_id>.md` | One per started sample | No | Starting sample | Each started sample |
 | Run Report | `runs/<run_id>.md` | One per started run | Single run when started | Each started run | Each started run |
 | Dataset Report | `<module_id>.dataset.md` | One per module with a trial dataset | No | Yes | Yes |
-| Review Report | `<module_id>.review.md` | One per module configured for review | No | When configured | When configured |
-| Worksheet Detection Report | `dataset-items/<module_id>.<item_file_key>.md` | One per dataset item per module | No | Yes | Yes |
+| Reproduction Report | `<module_id>.reproduction.md` | One per optimized module | No | Yes | Yes |
+| Dataset Item Report | `dataset-items/<module_id>.<item_file_key>.md` | One per dataset item per module | No | Yes | Yes |
 
 
 Use actual identifiers; do not infer that sample or run IDs are numeric. The exact filesystem-safe encoding and collision handling for identifiers remain to be specified. Distinct report identities must never resolve to the same file, including collisions with `index.md` or generated report suffixes.
@@ -49,7 +49,7 @@ ReportWriter supplies a common document envelope: report title, owning job/modul
 - Sample Report links to its Run Reports and back to its Module Report.
 - Run Report links to its Sample Report when owned by a sample, otherwise directly to its Module Report. It also links to its Module Report and Job Report where useful.
 - Dataset Reports link back to their Module Report.
-- Review Reports link to their Module and Job Reports; Module artifacts link to Review Reports. `write_review_report(module_id, md_fragment)` replaces the review fragment. See [Review Report](review-report.spec.md) for its launch-time source snapshot.
+- Reproduction Reports link to their Module and Job Reports; Module artifacts link to Reproduction Reports. `write_review_report(module_id, md_fragment)` replaces the review fragment. See [Reproduction Report](reproduction-report.spec.md) for its launch-time source snapshot.
 - Every report is identifiable when opened directly and provides a relative link to the Job Report: `index.md` from the root, or `../index.md` from `samples/`, `runs/`, and `dataset-items/`. Resolve all other navigation relative to the source report location as well.
 
 Parent/run link lists are managed navigation, not domain layouts inferred by ReportWriter.
@@ -75,7 +75,7 @@ The method names and producer assignments below are contracts. Every method take
 | Run report | Run execution client | Run | `write_run_report` | module_id, run_id; sample_id when applicable |
 | Module runs summary | Module executor | Module Runs | `write_module_runs_summary` | module_id |
 | Dataset report | TrialDataset | Dataset | `write_trial_dataset` | module_id |
-| Worksheet detection report | TrialDataset | Worksheet Detection | `write_worksheet_detection_report` | module_id, item_id |
+| Dataset item report | TrialDataset | Dataset Item | `write_worksheet_detection_report` | module_id, item_id |
 | Module optimization progress | ModuleOptimizer | Module, with optimizer | `write_module_optimization_progress` | module_id |
 
 `write_module_summary` receives the entire module summary fragment, including both execution groups for a mixed job. It is not one fragment per module.
@@ -219,7 +219,7 @@ The reporting flow is:
 
 - [Job Report](job-report.spec.md).
 - [Module Report](module-report.spec.md).
-- Sample and Run defaults are provided by DefaultReportRenderer. Dataset and Worksheet Detection layouts are defined in `dataset-report.spec.md` and `worksheet-detection-report.spec.md`.
+- Sample and Run defaults are provided by DefaultReportRenderer. Dataset and Dataset Item layouts are defined in `dataset-report.spec.md` and `dataset-item-report.spec.md`.
 - Exact identifier encoding, registration API, and integration with execution lifecycle remain implementation design items.
 
 This is the implemented architecture and file/fragment registry.

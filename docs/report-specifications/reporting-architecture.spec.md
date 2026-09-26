@@ -59,7 +59,7 @@ This is a snapshot update model: repeated writes replace a fragment rather than 
 
 ## 6. Report Types and Navigation
 
-The report types are Job, Module, Module Runs, Sample, Run, Dataset, Worksheet Detection, and optional Review. Job, Module, Module Runs, Dataset, and Review Reports reside in the root of the job run directory. Sample Reports reside in `samples/`, Run Reports in `runs/`, and Worksheet Detection Reports in `dataset-items/`. Output IPYNB files are execution artifacts linked from reports, not additional Markdown report types. Automatic notebook HTML export is removed.
+The report types are Job, Module, Module Runs, Sample, Run, Dataset, Dataset Item, and automatic Reproduction. Job, Module, Module Runs, Dataset, and Reproduction Reports reside in the root of the job run directory. Sample Reports reside in `samples/`, Run Reports in `runs/`, and Dataset Item Reports in `dataset-items/`. Output IPYNB files are execution artifacts linked from reports, not additional Markdown report types. Automatic notebook HTML export is removed.
 
 Job Reports link to Module Reports. Module Reports link to the applicable Run or Sample Reports and Dataset Reports. Sample Reports link to their Run Reports. Every detailed report remains identifiable when opened directly and provides navigation back to the job report.
 
@@ -67,7 +67,7 @@ Without an optimizer, a module has one run and no synthetic sample. With `start_
 
 ## 7. Detailed Contracts
 
-Dataset reporting includes a root-level Dataset Report and one Worksheet Detection Report per item in `dataset-items/`. The dataset summary links worksheet detection counters to these item reports. Neither report contains table-detection counts, rates, or per-table detail sections. Expected and predicted range sets remain available for explaining whole-worksheet outcomes. See [Dataset Report](dataset-report.spec.md) and [Worksheet Detection Report](worksheet-detection-report.spec.md).
+Dataset and Dataset Item Reports use universal targets, comparison predictions and dynamic metrics. See dataset-report.spec.md, dataset-item-report.spec.md and sample-report.spec.md. Task adapters supply comparison_prediction when the compared value differs from the full output.
 
 When preparing implementation tasks, also include the agreed [table detection set-semantics requirement](table-detection-evaluation.spec.md): repeated identical predicted ranges must be deduplicated before evaluation and must not reduce detection success or scores.
 
@@ -79,4 +79,4 @@ The following documents are the sources for detailed contracts; this architectur
 - [Job Report layout](job-report.spec.md).
 - [Module Report layouts](module-report.spec.md).
 
-Sample and Run defaults are defined by the renderer. Dataset and Worksheet Detection layouts are specified here.
+Sample and Run defaults are defined by the renderer. Dataset and Dataset Item layouts are specified here.
