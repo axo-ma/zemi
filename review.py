@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 from . import env
 from .dataset import zemi_path
-from .reporting import _cell, _table
+from .reporting import _cell, _table, _summary_params
 
 
 def _git(directory, *args):
@@ -151,7 +151,7 @@ def render_review(snapshot, *, samples, report, module_id, writer, item_count=No
         sample_id = sample.get('sample_trial_id') or sample.get('sample_id') or sample.get('id') or f'Sample {number}'
         label = str(sample_id)
         if sample.get('params'):
-            label += ': ' + json.dumps(sample['params'], ensure_ascii=False, sort_keys=True)
+            label += ': ' + json.dumps(_summary_params(sample['params']), ensure_ascii=False, sort_keys=True)
         rows.append((label, sample.get('score'), mean('item_tokens'), mean('prompt_tokens'),
                      sum(bool(r.get('evaluation_error')) for r in sruns)))
     parts = ['## Run configuration', _table(('Setting', 'Value'), settings), '## Reproduction',

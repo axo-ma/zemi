@@ -1,5 +1,10 @@
 # Encoding and prompt packages
 
+Result tables display an `encoding_prompt` binding as its `prompt_name` only.
+This applies to Samples, Selected Sample and Review results; Dataset sample
+columns also show the prompt name. Configuration and parameter sections retain
+the complete binding, and stored results and source snapshots are unchanged.
+
 A component keeps each experiment together. Its `params/` directory contains
 one package per launch variant:
 

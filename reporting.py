@@ -27,6 +27,13 @@ def _report_value(value):
     return value
 
 
+def _summary_params(params):
+    """Use the prompt name in result tables; preserve stored configuration."""
+    return {name: value.get("prompt_name", value)
+            if name == "encoding_prompt" and isinstance(value, Mapping) else value
+            for name, value in params.items()}
+
+
 def _cell(value):
     if isinstance(value, _Markdown):
         return str(value)
@@ -357,7 +364,7 @@ class DefaultReportRenderer:
         for number, sample in enumerate(samples, 1):
             sid = sample["id"]
             rows.append((_link(number, writer.href(source, writer.ref("sample", module_id, sid))),
-                " / ".join(_cell(sample.get("params", {}).get(k)) for k in param_names) or "—",
+                " / ".join(_cell(_summary_params(sample.get("params", {})).get(k)) for k in param_names) or "—",
                 sample.get("score"), sample.get("status"),
                 " / ".join(_cell(sample.get("metrics", {}).get(k)) for k in metrics) or "—",
                 _link(_count(sample.get("runs", [])), writer.href(source, writer.ref("module_runs", module_id), writer.sample_anchor(sid))),
@@ -373,7 +380,7 @@ class DefaultReportRenderer:
         source = writer.ref("module", module_id)
         return ("## Selected Sample\n\n" + prefix + "\n\n" + _table(("Sample", "Score", "Metrics", "Parameters"),
             [(_link(number, writer.href(source, writer.ref("sample", module_id, selected))), sample.get("score"),
-              sample.get("metrics"), sample.get("params"))]))
+              sample.get("metrics"), _summary_params(sample.get("params", {})))]))
 
     def render_module_optimization_progress(self, *, mode, detail=None):
         return "## Module Optimization Progress\n\n" + ("No parameter search was performed." if mode == "start_only" else detail or "No optimization progress details available.")
@@ -439,7 +446,10 @@ class DefaultReportRenderer:
             sid = getattr(trial, "report_sample_id", None)
             label = f"Sample {number}"
             params = trial.sample.values if getattr(trial, "sample", None) else {}
-            if params.get("encoding_format"):
+            binding = params.get("encoding_prompt")
+            if isinstance(binding, Mapping) and binding.get("prompt_name"):
+                label += f" ({binding['prompt_name']})"
+            elif params.get("encoding_format"):
                 label += f" ({params['encoding_format']})"
             sample_headers.append(_link(label, writer.href(source, writer.ref("sample", module_id, sid))))
         rows = []
