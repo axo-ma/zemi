@@ -96,8 +96,33 @@ def _short_value(value, href=None):
     return _Markdown(cell)
 
 
-def _prediction_cell(run, href=None):
+def _error_response(run):
+    prediction = run.get("prediction")
+    if isinstance(prediction, Mapping) and "raw_response" in prediction:
+        return prediction["raw_response"]
+    return prediction
+
+
+def _response_text(value):
+    return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, sort_keys=True)
+
+
+def _response_preview(value, href=None):
+    if value is None:
+        return "—"
+    text = _response_text(value).replace("\r", " ").replace("\n", " ")
+    truncated = bool(href) and len(text) > 60
+    if truncated:
+        text = text[:60]
+    fence = "`" * (max((len(part) for part in re.findall(r"`+", text)), default=0) + 1)
+    code = fence + " " + text.replace("|", "\\|") + " " + fence
+    return _Markdown(code + (_link("...", href) if truncated else ""))
+
+
+def _prediction_cell(run, href=None, show_error_response=False):
     if run.get("error") or run.get("evaluation_error"):
+        if show_error_response:
+            return _Markdown(_link("Error", href) + " · " + _response_preview(_error_response(run), href))
         return _link("Error", href)
     if _exact(run):
         return "✅"
@@ -548,7 +573,7 @@ class DefaultReportRenderer:
                 if not runs:
                     comparisons.append("—")
                 elif len(runs) == 1:
-                    comparisons.append(_prediction_cell(runs[0], href=href))
+                    comparisons.append(_prediction_cell(runs[0], href=href, show_error_response=True))
                 else:
                     comparisons.append(_short_value([_comparison(run) for run in runs], href))
             rows.append((_link(item["id"], href), matches, item.get("ground_truth"), *comparisons))
@@ -568,11 +593,18 @@ class DefaultReportRenderer:
                 if run.get("dataset_item_id") == item["id"]:
                     found.append(dict(run, report_sample_id=getattr(trial, "report_sample_id", None),
                                       report_sample_number=number, report_sample_label=label))
+        from .review import _fence
+        responses = []
+        for run in found:
+            response = _error_response(run)
+            if (run.get("error") or run.get("evaluation_error")) and response is not None:
+                responses += [f"### {run.get('run_id')}", _fence(_response_text(response))]
+        raw_section = "\n\n## Raw responses for errors\n\n" + "\n\n".join(responses) if responses else ""
         return (f"**Item ID:** `{item['id']}` · **Job run ID:** `{writer.root.name}`\n\n"
                 "## Input\n\n" + _table(("Parameter", "Value"), item.get("input", {}).items()) +
                 "\n\n## Target\n\n" + _cell(item.get("ground_truth")) +
                 "\n\n## Results\n\n" + _result_rows(found, writer=writer, module_id=module_id,
-                    source=source, include_sample=True))
+                    source=source, include_sample=True) + raw_section)
 
 
 class JobReporting:

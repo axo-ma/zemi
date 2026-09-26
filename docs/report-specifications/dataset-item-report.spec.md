@@ -18,4 +18,10 @@ No metric names, input fields or prediction keys are prescribed by the task.
 Standalone TrialDataset rendering uses this same layout. There are no
 Worksheet Detection, Expected ranges or task-specific summary sections.
 
+For execution or evaluation errors with a returned response, append Raw
+responses for errors, identified by Run ID. Preserve prediction.raw_response
+verbatim in a fence safe for embedded backticks; otherwise serialize the full
+returned prediction. Dataset Error and `...` links lead here. Missing responses
+do not fabricate text.
+
 Top navigation contains exactly one link: **Back to Dataset Report**. Links in Results remain unchanged.
