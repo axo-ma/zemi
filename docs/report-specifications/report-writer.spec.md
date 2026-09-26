@@ -22,14 +22,18 @@ Paths below are relative to the job run directory. Sample Reports reside in `sam
 | Job Report | `index.md` | One per job execution | Yes | Yes | Yes |
 | Module Report | `<module_id>.md` | One per configured module | Yes | Yes | Yes |
 | Module Runs Report | `<module_id>.runs.md` | One per module with an optimizer | No | Yes | Yes |
-| Sample Report | `samples/<module_id>.sample-<sample_id>.md` | One per started sample | No | Starting sample | Each started sample |
-| Run Report | `runs/<module_id>.run-<run_id>.md` | One per started run | Single run when started | Each started run | Each started run |
+| Sample Report | `samples/<sample_id>.md` | One per started sample | No | Starting sample | Each started sample |
+| Run Report | `runs/<run_id>.md` | One per started run | Single run when started | Each started run | Each started run |
 | Dataset Report | `<module_id>.dataset.md` | One per module with a trial dataset | No | Yes | Yes |
 | Review Report | `<module_id>.review.md` | One per module configured for review | No | When configured | When configured |
 | Worksheet Detection Report | `dataset-items/<module_id>.<item_file_key>.md` | One per dataset item per module | No | Yes | Yes |
 
 
 Use actual identifiers; do not infer that sample or run IDs are numeric. The exact filesystem-safe encoding and collision handling for identifiers remain to be specified. Distinct report identities must never resolve to the same file, including collisions with `index.md` or generated report suffixes.
+
+When an execution ID already starts with `<module_id>-sample-` or
+`<module_id>-run-`, do not add those prefixes again. Custom IDs receive the
+missing module/kind prefix. All links use registered references.
 
 HTML, IPYNB, and other execution artifacts are not additional MD report types. Link to their actual generated locations; this registry does not change their paths.
 
@@ -40,7 +44,7 @@ Create Job and Module Reports early enough to represent unstarted modules. Creat
 ReportWriter supplies a common document envelope: report title, owning job/module/sample/run identifiers as applicable, and relative navigation links. Clients supply the report content through the fragment methods below. A content fragment must not duplicate the document-level title or navigation envelope.
 
 - Job Report links to Module Reports.
-- Module Report without an optimizer links to its single Run Report and directly to available output HTML/IPYNB.
+- Module Report without an optimizer links to its single Run Report and directly to available output IPYNB. Automatic notebook HTML export is removed.
 - Module Report with an optimizer links to Sample Reports and the Dataset Report when applicable. Module Optimization Progress are included in the Module Report itself.
 - Sample Report links to its Run Reports and back to its Module Report.
 - Run Report links to its Sample Report when owned by a sample, otherwise directly to its Module Report. It also links to its Module Report and Job Report where useful.

@@ -534,7 +534,7 @@ class ComponentReport:
                 if str(input_params[name]):
                     self._secret_values.add(str(input_params[name]))
                 input_params[name] = "***"
-        entry = {"trial_id": playbook.trial_id, "playbook_name": playbook.playbook_name, "arsenal": playbook.arsenal_id, "input_params": input_params, "resolved_params": copy.deepcopy(playbook.resolved_params), "output_params": {}, "output_notebook": playbook.output_relative.as_posix(), "output_html": playbook.output_html_relative.as_posix(), "output_path": playbook.output_relative.as_posix(), "started_at": _timestamp(), "finished_at": None, "duration_seconds": None, "status": "running", "error": None}
+        entry = {"trial_id": playbook.trial_id, "playbook_name": playbook.playbook_name, "arsenal": playbook.arsenal_id, "input_params": input_params, "resolved_params": copy.deepcopy(playbook.resolved_params), "output_params": {}, "output_notebook": playbook.output_relative.as_posix(), "output_path": playbook.output_relative.as_posix(), "started_at": _timestamp(), "finished_at": None, "duration_seconds": None, "status": "running", "error": None}
         self.data["trials"].append(entry)
         self.save()
         return entry
@@ -607,48 +607,62 @@ class Playbook(Module):
             self.module_id = self.trial_id
         self.output_relative = Path("notebooks") / f"{self.trial_id}.ipynb"
         self.output_path = component.run_directory / self.output_relative
-        self.output_html_relative = self.output_relative.with_suffix(".html")
-        self.output_html_path = component.run_directory / self.output_html_relative
 
     def run(self) -> None:
         import papermill
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
         started = time.monotonic(); self._print_start(); entry = self.component.report.start_trial(self)
+        kernel = self.component._module_kernels.get(self.module_id)
+        execution_options = {}
+        if kernel is not None:
+            from .execution import register_engine
+            register_engine()
+            execution_options = {"engine_name": "zemi-module", "zemi_kernel": kernel}
         try:
             with _output_context(self.component.run_directory):
-                papermill.execute_notebook(str(self.source_path), str(self.output_path), parameters=copy.deepcopy(self.params), cwd=str(self.component.root), progress_bar=True, log_output=False, stdout_file=sys.stdout, stderr_file=sys.stderr)
-            entry["output_params"] = self._extract_output_params()
-            entry["report_output_keys"] = self._extract_report_output_keys()
-            entry["timed_cells"] = self._add_cell_timings()
-            self._write_html()
+                notebook = papermill.execute_notebook(str(self.source_path), str(self.output_path), parameters=copy.deepcopy(self.params), cwd=str(self.component.root), progress_bar=True, log_output=False, stdout_file=sys.stdout, stderr_file=sys.stderr, **execution_options)
+            if not isinstance(notebook, Mapping) or "cells" not in notebook:
+                notebook = self._read_output_notebook()
+            entry["output_params"] = self._extract_output_params(notebook)
+            entry["report_output_keys"] = self._extract_report_output_keys(notebook)
+            entry["timed_cells"] = self._add_cell_timings(notebook)
         except Exception as error:
             duration = time.monotonic() - started
+            if kernel is not None:
+                try:
+                    kernel.close()
+                except Exception as kernel_error:
+                    entry["kernel_cleanup_error"] = _error_data(kernel_error)
+            notebook = None
             if self.output_path.is_file():
                 try:
+                    notebook = self._read_output_notebook()
                     if not entry.get("output_params"):
-                        entry["output_params"] = self._extract_output_params()
-                        entry["report_output_keys"] = self._extract_report_output_keys()
+                        entry["output_params"] = self._extract_output_params(notebook)
+                        entry["report_output_keys"] = self._extract_report_output_keys(notebook)
                 except Exception as output_error:
                     entry["output_error"] = _error_data(output_error)
             try:
-                entry["timed_cells"] = self._add_cell_timings()
+                entry["timed_cells"] = self._add_cell_timings(notebook)
             except Exception as timing_error:
                 entry["timing_error"] = _error_data(timing_error)
-            try:
-                self._write_html()
-            except Exception as html_error:
-                entry["html_error"] = _error_data(html_error)
             entry["duration_seconds"] = duration
             self.component.report.fail_playbook(entry, error); self.component.report.save(); self._print_failure(error, duration)
             raise
         duration = time.monotonic() - started
         entry["duration_seconds"] = duration; self.component.report.finish_playbook(entry); self.component.report.save(); self._print_success(duration)
 
-    def _extract_output_params(self) -> dict[str, Any]:
+    def _read_output_notebook(self):
         if not self.output_path.is_file():
-            return {}
+            return None
         import nbformat
-        notebook = nbformat.read(self.output_path, as_version=4); found = []
+        return nbformat.read(self.output_path, as_version=4)
+
+    def _extract_output_params(self, notebook=None) -> dict[str, Any]:
+        notebook = self._read_output_notebook() if notebook is None else notebook
+        if notebook is None:
+            return {}
+        found = []
         for cell in notebook.cells:
             for output in cell.get("outputs", []):
                 data = output.get("data", {})
@@ -658,11 +672,10 @@ class Playbook(Module):
             raise ValueError("Notebook published output_params() more than once")
         return {} if not found else validate_output_params(found[0])
 
-    def _extract_report_output_keys(self) -> list[str]:
-        if not self.output_path.is_file():
+    def _extract_report_output_keys(self, notebook=None) -> list[str]:
+        notebook = self._read_output_notebook() if notebook is None else notebook
+        if notebook is None:
             return []
-        import nbformat
-        notebook = nbformat.read(self.output_path, as_version=4)
         found = [output.get("data", {})[PLAYBOOK_REPORT_MIME]
                  for cell in notebook.cells for output in cell.get("outputs", [])
                  if PLAYBOOK_REPORT_MIME in output.get("data", {})]
@@ -691,11 +704,12 @@ class Playbook(Module):
         line = "!" * 78
         print(f"{line}\n✗ PLAYBOOK FAILED · {self.playbook_name} · {self.trial_id}\n  Duration: {_format_duration(duration)}\n  Error   : {type(error).__name__}: {error}\n  Output  : {self.output_path.relative_to(self.component.root).as_posix()}\n{line}")
 
-    def _add_cell_timings(self) -> int:
-        if not self.output_path.is_file():
+    def _add_cell_timings(self, notebook=None) -> int:
+        notebook = self._read_output_notebook() if notebook is None else notebook
+        if notebook is None:
             return 0
         import nbformat
-        notebook = nbformat.read(self.output_path, as_version=4); cells = []; count = 0
+        cells = []; count = 0
         for cell in notebook.cells:
             if "zemi-cell-timing" in cell.metadata.get("tags", []):
                 continue
@@ -711,27 +725,6 @@ class Playbook(Module):
             note.metadata["zemi"] = {"source_cell_id": cell.get("id"), "duration_seconds": duration}
             cells.append(note); count += 1
         notebook.cells = cells; nbformat.write(notebook, self.output_path); return count
-
-    def _write_html(self) -> None:
-        if not self.output_path.is_file():
-            return
-        import nbconvert
-        from nbconvert import HTMLExporter
-        package_path = Path(nbconvert.__file__).resolve()
-        template_root = next(
-            (
-                parent / "share" / "jupyter" / "nbconvert" / "templates"
-                for parent in package_path.parents
-                if (parent / "share" / "jupyter" / "nbconvert" / "templates" / "lab").is_dir()
-            ),
-            None,
-        )
-        options = {} if template_root is None else {"extra_template_basedirs": [str(template_root)], "extra_template_paths": [str(template_root)]}
-        body, _resources = HTMLExporter(**options).from_filename(str(self.output_path))
-        temporary = self.output_html_path.with_name(f".{self.output_html_path.name}.tmp")
-        temporary.write_text(body, encoding="utf-8")
-        os.replace(temporary, self.output_html_path)
-
 
 class ZemiComponent:
     """Load component parameters and own expanded playbook trial lifecycle."""
@@ -937,6 +930,7 @@ class ZemiComponent:
         self.modules = tuple(playbooks)
         self.playbooks = self.modules  # compatibility alias
         from .reporting import JobReporting
+        self._module_kernels = {}
         self.reporting = JobReporting(self)
         self.report.reporting = self.reporting
         self._closed = False; self.report.save()
@@ -997,7 +991,7 @@ class ZemiComponent:
         )
         parent = {"playbook_trial_id": playbook.playbook_id, "playbook_id": playbook.playbook_id,
                   "arsenal": playbook.arsenal_id,
-                  "optimizer": {key: copy.deepcopy(config[key]) for key in ("mode", "strategy", "max_trials", "seed", "blocks") if key in config},
+                  "optimizer": {key: copy.deepcopy(config[key]) for key in ("mode", "strategy", "max_trials", "seed", "blocks", "reuse_kernel") if key in config},
                   "started_at": _timestamp(), "finished_at": None, "status": "running", "samples": [],
                   "ranking": [], "best_sample": None}
         self.report.data.setdefault("job_trial", {"job_trial_id": self.run_directory.name, "playbook_trials": []})["playbook_trials"].append(parent)
@@ -1033,7 +1027,7 @@ class ZemiComponent:
                     entry = next((t for t in reversed(self.report.data["trials"]) if t["trial_id"] == child.trial_id), None)
                     if entry:
                         entry["playbook_run_id"] = record["playbook_run_id"]
-                        record["artifacts"] = {key: entry[key] for key in ("output_notebook", "output_html")}
+                        record["artifacts"] = {"output_notebook": entry["output_notebook"]}
                         record["report_output_keys"] = entry.get("report_output_keys", [])
                 return entry["output_params"]
 
@@ -1078,6 +1072,9 @@ class ZemiComponent:
             self.reporting.finish_sample(playbook.module_id, sample_id, report_text)
             self.reporting.update_dataset(playbook.module_id, trial_dataset, history)
 
+        if config.get("reuse_kernel", True):
+            from .execution import ModuleKernel
+            self._module_kernels[playbook.module_id] = ModuleKernel(self.root)
         try:
             while (sample := optimizer.next_param_sample(history)) is not None:
                 if sample.key() in {item.sample.key() for item in history}:
@@ -1135,6 +1132,12 @@ class ZemiComponent:
             parent["status"] = "failed"
             raise
         finally:
+            kernel = self._module_kernels.pop(playbook.module_id, None)
+            if kernel is not None:
+                try:
+                    kernel.close()
+                except Exception as kernel_error:
+                    parent["kernel_cleanup_error"] = _error_data(kernel_error)
             parent["finished_at"] = _timestamp()
             self.report.save()
 

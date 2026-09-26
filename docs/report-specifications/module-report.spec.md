@@ -51,7 +51,7 @@ When no outputs are published, state `No published output.` For incomplete execu
 
 ### Section 3: Module Artifacts
 
-Show an Artifact / Format / File table. For notebook modules, provide direct HTML and IPYNB links when available. Include other declared generated artifacts when available. If no files were produced, state `No output files available.`
+Show an Artifact / Format / File table. For notebook modules, provide a direct IPYNB link when available. Automatic notebook HTML export is removed. Include other declared generated artifacts when available. If no files were produced, state `No output files available.`
 
 ### Section 4: Errors
 
@@ -89,9 +89,9 @@ One row per started sample, in execution order:
 
 | Sample | Parameters<br>temperature / top_p / top_k | Score ↑ | Status | Metrics<br>precision / recall / f1 | Runs<br>(OK / Total) | Duration |
 |---|---|---:|---|---|---:|---|
-| [1](samples/table_detection.sample-sample-001.md) | 0.0 / 0.9 / 40 | 0.89 | Succeeded | 0.91 / 0.87 / 0.89 | [20 / 20](table_detection.runs.md#sample-001) | 52 s |
-| [2](samples/table_detection.sample-sample-002.md) | 0.3 / 0.95 / 50 | 0.94 | Succeeded | 0.96 / 0.92 / 0.94 | [20 / 20](table_detection.runs.md#sample-002) | 50 s |
-| [3](samples/table_detection.sample-sample-003.md) | 0.6 / 1.0 / 60 | — | Failed | — / — / — | [7 / 8](table_detection.runs.md#sample-003) | 23 s |
+| [1](samples/table_detection-sample-001.md) | 0.0 / 0.9 / 40 | 0.89 | Succeeded | 0.91 / 0.87 / 0.89 | [20 / 20](table_detection.runs.md#sample-001) | 52 s |
+| [2](samples/table_detection-sample-002.md) | 0.3 / 0.95 / 50 | 0.94 | Succeeded | 0.96 / 0.92 / 0.94 | [20 / 20](table_detection.runs.md#sample-002) | 50 s |
+| [3](samples/table_detection-sample-003.md) | 0.6 / 1.0 / 60 | — | Failed | — / — / — | [7 / 8](table_detection.runs.md#sample-003) | 23 s |
 
 Column order is fixed: Sample, Parameters, Score, Status, Metrics, Runs, Duration. The example values are illustrative. Show the score direction only when known from the evaluation contract.
 

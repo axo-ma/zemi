@@ -54,6 +54,7 @@ def render_review(snapshot, *, samples, report, module_id, writer, item_count=No
                 ('Playbook', snapshot['playbook']), *snapshot['settings'].items(),
                 ('Optimizer', snapshot['optimizer'].get('strategy')),
                 ('Maximum samples', snapshot['optimizer'].get('max_trials')),
+                ('Reuse kernel', snapshot['optimizer'].get('reuse_kernel', True)),
                 ('Worksheets', item_count), ('Samples', len(samples)),
                 ('Successful runs / Total', f"{sum(r.get('status') == 'succeeded' for r in runs)} / {len(runs)}")]
     settings.extend((f"Commit: {repo['directory']}", repo['commit']) for repo in snapshot['repositories'])

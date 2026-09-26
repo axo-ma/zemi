@@ -37,7 +37,7 @@ Each module runs once with the specified parameters. Sample, best result, and sc
 
 | Module | Status | Duration | Output |
 |---|---|---|---|
-| [toybook](toybook.md) | Succeeded | 52 s | [HTML](notebooks/toybook-output.html) · [IPYNB](notebooks/toybook-output.ipynb) |
+| [toybook](toybook.md) | Succeeded | 52 s | [IPYNB](notebooks/toybook-output.ipynb) |
 | [validation](validation.md) | Failed | 23 s | [IPYNB](notebooks/validation-output.ipynb) |
 | [export](export.md) | Not started | — | — |
 
@@ -45,7 +45,7 @@ Example links illustrate the report structure; they do not point to existing spe
 
 ### Direct Notebook Output Links
 
-- For a notebook module, Output provides direct links to the executed output notebook in HTML and IPYNB formats, when available. The user can open either artifact directly from the summary without first opening the module report.
+- For a notebook module, Output provides a direct link to the executed output IPYNB when available. Automatic notebook HTML export is removed.
 - These links target generated output artifacts, not the source notebook.
 - The module name continues to link to the module report; Output links are additional navigation.
 - Show only artifacts that were actually produced, including partial output from a failed execution. If neither format is available, display `—`.
@@ -58,8 +58,8 @@ The `start_only` and `optimize` modes share the same table structure, with a man
 
 | Module | Mode | Status | Samples<br>(OK / Total) | Runs<br>(OK / Total) | Result | Score | Duration |
 |---|---|---|---:|---:|---|---:|---|
-| [extraction](extraction.md) | `optimize` | Succeeded | [8 / 8](extraction.md#samples) | [160 / 160](extraction.runs.md) | [sample-006](samples/extraction.sample-sample-006.md) | 0.94 | 7 min 10 s |
-| [validation](validation.md) | `start_only` | Succeeded | [1 / 1](validation.md#samples) | [20 / 20](validation.runs.md) | [sample-001](samples/validation.sample-sample-001.md) | 0.87 | 44 s |
+| [extraction](extraction.md) | `optimize` | Succeeded | [8 / 8](extraction.md#samples) | [160 / 160](extraction.runs.md) | [sample-006](samples/extraction-sample-006.md) | 0.94 | 7 min 10 s |
+| [validation](validation.md) | `start_only` | Succeeded | [1 / 1](validation.md#samples) | [20 / 20](validation.runs.md) | [sample-001](samples/validation-sample-001.md) | 0.87 | 44 s |
 
 ### Summary Links and Column Labels
 
@@ -68,7 +68,7 @@ The `start_only` and `optimize` modes share the same table structure, with a man
 - The complete Runs counter is a link to `<module_id>.runs.md`, the separate Module Runs Report listing individual runs across all samples.
 - Result links to the existing Sample Report of the selected sample under `samples/`. There is no separate selected-sample report type.
 - In `optimize`, Result identifies the optimizer-selected sample; in `start_only`, it identifies the starting sample. If no result report exists, show `—` rather than a broken link.
-- Module names continue to link to root-level Module Reports. HTML/IPYNB links in the single-execution table continue to open generated notebook artifacts directly.
+- Module names continue to link to root-level Module Reports. IPYNB links in the single-execution table open generated notebook artifacts directly.
 - Resolve Sample Report filenames from registered report references, not by reconstructing them in the renderer. Example filenames are illustrative; the writer encodes identifiers safely and resolves collisions.
 
 ### optimize Mode

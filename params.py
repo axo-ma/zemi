@@ -22,7 +22,7 @@ _SYSTEM_KEYS = {"version", "params"}
 _COMPONENT_KEYS = {"name", "stop_on_error", "params"}
 _ARSENAL_KEYS = {"id", "config_path", "lifecycle", "params"}
 _MODULE_KEYS = {"id", "kind", "path", "arsenal", "enabled", "params", "optimizer"}
-_OPTIMIZER_KEYS = {"mode", "strategy", "max_trials", "max_samples", "seed", "blocks", "sample_trial", "trial_dataset"}
+_OPTIMIZER_KEYS = {"mode", "strategy", "max_trials", "max_samples", "seed", "blocks", "sample_trial", "trial_dataset", "reuse_kernel"}
 _TRIAL_KEYS = {"type", "dataset", "params"}
 _TRIAL_DATASET_KEYS = {"path", "type"}
 _LEGACY_TRIAL_KEYS = {"dataset", "evaluator", "objective", "run"}
@@ -174,6 +174,10 @@ def _validate_optimizer(raw: Any, label: str) -> dict[str, Any]:
             or (isinstance(mode, Mapping) and set(mode) == {"select"})):
         raise ValueError(f"{label}.mode must be optimize, start_only, or a select wrapper")
     optimizer["mode"] = copy.deepcopy(mode)
+    reuse_kernel = optimizer.get("reuse_kernel", True)
+    if not isinstance(reuse_kernel, bool):
+        raise ValueError(f"{label}.reuse_kernel must be boolean")
+    optimizer["reuse_kernel"] = reuse_kernel
     strategy = optimizer.get("strategy")
     if strategy not in _STRATEGIES:
         raise ValueError(f"{label}.strategy must be grid, random, coordinate, or block_coordinate")

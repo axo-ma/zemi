@@ -7,6 +7,29 @@ from functools import cached_property
 from importlib import import_module
 import os
 from typing import TYPE_CHECKING, Any, Final
+import atexit
+
+
+_reuse_clients = False
+_openai_clients = {}
+
+
+def _set_client_reuse(enabled):
+    global _reuse_clients
+    _reuse_clients = enabled
+
+
+def _close_reused_clients():
+    clients = list(_openai_clients.values())
+    _openai_clients.clear()
+    for client in clients:
+        try:
+            client.close()
+        except Exception:
+            pass
+
+
+atexit.register(_close_reused_clients)
 
 if TYPE_CHECKING:
     import dspy
@@ -92,9 +115,20 @@ class OpenAILib(_Adapter):
     @cached_property
     def client(self) -> "openai.OpenAI":
         module = self._module("openai")
-        return module.OpenAI(base_url=self._config.openai_url, api_key=self._config.api_key,
+        config = self._config
+        key = (config.openai_url, config.api_key, config.timeout, config.model,
+               config.context_window, config.protocol, config.provider,
+               tuple(sorted((config.headers or {}).items())))
+        if _reuse_clients:
+            client = _openai_clients.get(key)
+            if client is not None and not client.is_closed:
+                return client
+        client = module.OpenAI(base_url=self._config.openai_url, api_key=self._config.api_key,
                              timeout=self._config.timeout,
                              default_headers=self._config.headers)
+        if _reuse_clients:
+            _openai_clients[key] = client
+        return client
 
 
 class LiteLLMLib(_Adapter):

@@ -69,6 +69,29 @@ mode = { select = ["optimize", "start_only"] }
   including dataset runs, evaluation, history, best sample, and report.
 - `optimize` runs the full score-maximizing loop.
 
+### Kernel reuse
+
+`[modules.optimizer].reuse_kernel` is a boolean, default `true`, in both
+`optimize` and `start_only`. One Python kernel executes all dataset Runs of
+all samples in that Module. Set `reuse_kernel = false` for a new kernel per
+Run. The flag is optimizer configuration, never a Module input or dimension.
+Modules without an optimizer continue to use an independent kernel.
+
+Before each shared-kernel Run, ZEMI resets the interactive variable namespace,
+restores the launch environment/Python path and component working directory,
+and resets output publication. Imported packages and managed client caches
+remain loaded. Mutable globals inside imported user modules are not reset;
+stateful playbooks requiring full process isolation should disable reuse.
+Failures invalidate the kernel; subsequent Runs start a new one. ZEMI closes
+the kernel after the Module, including error paths. Arsenal lifecycle and
+model activation are unchanged. OpenAI clients with the same connection/model
+configuration are reused inside that kernel; changed configurations create
+separate clients. Requests do not accumulate conversation history.
+
+Papermill remains the executor. Each Run retains its own output IPYNB and
+cell timings. Successful execution consumes the returned notebook in memory;
+failed execution may read the partial notebook. Automatic HTML export is removed.
+
 `[modules.optimizer.trial_dataset]` owns the dataset path. Its `path` field is
 required for variable Module parameters.
 `TableDetectionTrialDataset(config=trial_dataset).load()` validates the flat

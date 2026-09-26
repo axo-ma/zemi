@@ -156,7 +156,8 @@ class ReportWriter:
         if key not in self._refs:
             number = 1 + sum(k[0] == "sample" and k[1] == module_id for k in self._refs)
             self._sample_anchors[sample_id] = f"sample-{number}"
-        ref = self._register(key, "samples/", f"{module_id}.sample-{sample_id}")
+        stem = str(sample_id) if str(sample_id).startswith(f"{module_id}-sample-") else f"{module_id}-{sample_id}" if str(sample_id).startswith("sample-") else f"{module_id}-sample-{sample_id}"
+        ref = self._register(key, "samples/", stem)
         self._save(key)
         return ref
 
@@ -164,7 +165,8 @@ class ReportWriter:
         key = ("run", module_id, run_id)
         if key in self._refs:
             return self._refs[key]
-        ref = self._register(key, "runs/", f"{module_id}.run-{run_id}")
+        stem = str(run_id) if str(run_id).startswith(f"{module_id}-run-") else f"{module_id}-{run_id}" if str(run_id).startswith("run-") else f"{module_id}-run-{run_id}"
+        ref = self._register(key, "runs/", stem)
         self._parents[key] = sample_id
         self._save(key)
         if sample_id is not None and ("sample", module_id, sample_id) in self._refs:
@@ -327,7 +329,8 @@ class DefaultReportRenderer:
 
     def render_module_optimization_config(self, *, config, space, dataset_ref=None, writer=None, module_id=None, item_count=None):
         rows = [("Optimizer", config.get("strategy")), ("Mode", config.get("mode")),
-                ("Maximum trials", config.get("max_trials")), ("Dataset items", item_count)]
+                ("Maximum trials", config.get("max_trials")), ("Dataset items", item_count),
+                ("Reuse kernel", config.get("reuse_kernel", True))]
         for setting in ("seed", "blocks"):
             if setting in config:
                 rows.append((setting.title(), config[setting]))
@@ -449,6 +452,11 @@ class DefaultReportRenderer:
             comparisons = []
             for trial in history:
                 runs = [run for run in trial.runs if run.get("dataset_item_id") == item["id"]]
+                if runs and all(run.get("metrics", {}).get("exact_match") is True
+                                and run.get("status") == "succeeded"
+                                and not run.get("error") and not run.get("evaluation_error") for run in runs):
+                    comparisons.append("✅")
+                    continue
                 predictions = [run.get("prediction") for run in runs]
                 ranges = [prediction.get("ranges") if isinstance(prediction, Mapping) else None
                           for prediction in predictions]
@@ -460,7 +468,7 @@ class DefaultReportRenderer:
             rows.append((_link(item["id"], href), _link(f"{ok} / {total}", writer.href(source, writer.ref("item", module_id, item["id"]))),
                          f"{ok / total:.0%}" if total else "—", item.get("ground_truth"), *comparisons))
         return (f"**Job run ID:** `{writer.root.name}` · **Items:** {len(dataset.items)} · **Samples:** {len(history)}\n\n" +
-            "## Items\n\nTarget shows the expected result; sample columns show predictions. `[]` means no tables; `—` means no prediction. Long predictions link to the full item report via `...`.\n\n" +
+            "## Items\n\nTarget shows the expected result; sample columns show ✅ for exact matches and predictions for mismatches. `[]` means no tables; `—` means no prediction. Long predictions link to the full item report via `...`.\n\n" +
             _table(("Item ID", "Worksheets detected<br>(OK / Total)", "Worksheet detection rate", "Target", *sample_headers), rows))
 
     def render_worksheet_detection_report(self, *, dataset, item, history, writer, module_id):
@@ -596,7 +604,7 @@ class JobReporting:
                 params = single.get("input_params", {}) if single else {}
                 writer.write_module_parameters(mid, renderer.render_module_parameters(params=params))
                 writer.write_module_results(mid, renderer.render_module_results(outputs=single.get("output_params", {}) if single else {}))
-                outputs = {"HTML": single.get("output_html"), "IPYNB": single.get("output_notebook")} if single else {}
+                outputs = {"IPYNB": single.get("output_notebook")} if single else {}
                 outputs = {k: v for k, v in outputs.items() if v and (writer.root / v).is_file()}
                 if single:
                     rid = single["trial_id"]
