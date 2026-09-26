@@ -112,9 +112,10 @@ def render_review(snapshot, *, samples, report, module_id, writer, item_count=No
             values = [(r.get('prediction') or {}).get(key) for r in sruns]
             values = [v for v in values if isinstance(v, (float, int)) and not isinstance(v, bool)]
             return sum(values) / len(values) if values else None
-        label = sample.get('params', {}).get('encoding_format') or (
-            json.dumps(sample['params'], ensure_ascii=False, sort_keys=True)
-            if sample.get('params') else f'Sample {number}')
+        sample_id = sample.get('sample_id') or f'Sample {number}'
+        label = str(sample_id)
+        if sample.get('params'):
+            label += ': ' + json.dumps(sample['params'], ensure_ascii=False, sort_keys=True)
         rows.append((label, sample.get('score'), mean('item_tokens'), mean('prompt_tokens'),
                      sum(bool(r.get('evaluation_error')) for r in sruns)))
     parts = ['## Run configuration', _table(('Setting', 'Value'), settings), '## Reproduction',
