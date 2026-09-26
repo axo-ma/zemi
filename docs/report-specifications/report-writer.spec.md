@@ -25,6 +25,7 @@ Paths below are relative to the job run directory. Sample Reports reside in `sam
 | Sample Report | `samples/<module_id>.sample-<sample_id>.md` | One per started sample | No | Starting sample | Each started sample |
 | Run Report | `runs/<module_id>.run-<run_id>.md` | One per started run | Single run when started | Each started run | Each started run |
 | Dataset Report | `<module_id>.dataset.md` | One per module with a trial dataset | No | Yes | Yes |
+| Review Report | `<module_id>.review.md` | One per module configured for review | No | When configured | When configured |
 | Worksheet Detection Report | `dataset-items/<module_id>.<item_file_key>.md` | One per dataset item per module | No | Yes | Yes |
 
 
@@ -44,6 +45,7 @@ ReportWriter supplies a common document envelope: report title, owning job/modul
 - Sample Report links to its Run Reports and back to its Module Report.
 - Run Report links to its Sample Report when owned by a sample, otherwise directly to its Module Report. It also links to its Module Report and Job Report where useful.
 - Dataset Reports link back to their Module Report.
+- Review Reports link to their Module and Job Reports; Module artifacts link to Review Reports. `write_review_report(module_id, md_fragment)` replaces the review fragment. See [Review Report](review-report.spec.md) for its launch-time source snapshot.
 - Every report is identifiable when opened directly and provides a relative link to the Job Report: `index.md` from the root, or `../index.md` from `samples/`, `runs/`, and `dataset-items/`. Resolve all other navigation relative to the source report location as well.
 
 Parent/run link lists are managed navigation, not domain layouts inferred by ReportWriter.

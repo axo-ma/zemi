@@ -59,7 +59,7 @@ This is a snapshot update model: repeated writes replace a fragment rather than 
 
 ## 6. Report Types and Navigation
 
-The report types are Job, Module, Module Runs, Sample, Run, Dataset, and Worksheet Detection. Job, Module, Module Runs, and Dataset Reports reside in the root of the job run directory. Sample Reports reside in `samples/`, Run Reports in `runs/`, and Worksheet Detection Reports in `dataset-items/`. Notebook HTML/IPYNB files are execution artifacts linked from reports, not additional Markdown report types.
+The report types are Job, Module, Module Runs, Sample, Run, Dataset, Worksheet Detection, and optional Review. Job, Module, Module Runs, Dataset, and Review Reports reside in the root of the job run directory. Sample Reports reside in `samples/`, Run Reports in `runs/`, and Worksheet Detection Reports in `dataset-items/`. Notebook HTML/IPYNB files are execution artifacts linked from reports, not additional Markdown report types.
 
 Job Reports link to Module Reports. Module Reports link to the applicable Run or Sample Reports and Dataset Reports. Sample Reports link to their Run Reports. Every detailed report remains identifiable when opened directly and provides navigation back to the job report.
 

@@ -140,6 +140,11 @@ class ReportWriter:
         self._save(("dataset", module_id))
         return ref
 
+    def register_review(self, module_id):
+        ref = self._register(("review", module_id), "", module_id, ".review.md")
+        self._save(("review", module_id))
+        return ref
+
     def register_item(self, module_id, item_id):
         key = ("item", module_id, item_id)
         ref = self._register(key, "dataset-items/", f"{module_id}.{item_id}")
@@ -217,6 +222,8 @@ class ReportWriter:
             title, order = f"Dataset: {self._modules[key[1]]['filename']}", ("trial_dataset",)
         elif key[0] == "item":
             title, order = f"Worksheet Detection: {key[2]}", ("worksheet_detection_report",)
+        elif key[0] == "review":
+            title, order = f"Review: {key[1]}", ("review_report",)
         elif key[0] == "sample":
             title, order = f"Sample: {key[2]}", ("sample_trial",)
         else:
@@ -264,6 +271,7 @@ class ReportWriter:
         return self._write(key, "run_report", md_fragment)
     def write_module_runs_summary(self, module_id, md_fragment): return self._write(("module_runs", module_id), "module_runs_summary", md_fragment)
     def write_trial_dataset(self, module_id, md_fragment): return self._write(("dataset", module_id), "trial_dataset", md_fragment)
+    def write_review_report(self, module_id, md_fragment): return self._write(("review", module_id), "review_report", md_fragment)
     def write_worksheet_detection_report(self, module_id, item_id, md_fragment): return self._write(("item", module_id, item_id), "worksheet_detection_report", md_fragment)
 
 
@@ -423,6 +431,14 @@ class DefaultReportRenderer:
 
     def render_trial_dataset(self, *, dataset, history, writer, module_id):
         source = writer.ref("dataset", module_id)
+        sample_headers = []
+        for number, trial in enumerate(history, 1):
+            sid = getattr(trial, "report_sample_id", None)
+            label = f"Sample {number}"
+            params = trial.sample.values if getattr(trial, "sample", None) else {}
+            if params.get("encoding_format"):
+                label += f" ({params['encoding_format']})"
+            sample_headers.append(_link(label, writer.href(source, writer.ref("sample", module_id, sid))))
         rows = []
         for item in dataset.items:
             found = [run for trial in history for run in trial.runs if run.get("dataset_item_id") == item["id"]]
@@ -430,10 +446,22 @@ class DefaultReportRenderer:
             total = len(found)
             workbook = item.get("input", {}).get("workbook_path")
             href = writer.artifact_href(source, __import__("zemi.dataset", fromlist=["zemi_path"]).zemi_path(workbook)) if workbook else None
+            comparisons = []
+            for trial in history:
+                runs = [run for run in trial.runs if run.get("dataset_item_id") == item["id"]]
+                predictions = [run.get("prediction") for run in runs]
+                ranges = [prediction.get("ranges") if isinstance(prediction, Mapping) else None
+                          for prediction in predictions]
+                actual = "; ".join(json.dumps(value, ensure_ascii=False) if value is not None else "—"
+                                   for value in ranges) if ranges else "—"
+                if len(actual) > 60:
+                    actual = _Markdown(_cell(actual[:60]) + _link("...", writer.href(source, writer.ref("item", module_id, item["id"]))))
+                comparisons.append(actual)
             rows.append((_link(item["id"], href), _link(f"{ok} / {total}", writer.href(source, writer.ref("item", module_id, item["id"]))),
-                         f"{ok / total:.0%}" if total else "—"))
+                         f"{ok / total:.0%}" if total else "—", item.get("ground_truth"), *comparisons))
         return (f"**Job run ID:** `{writer.root.name}` · **Items:** {len(dataset.items)} · **Samples:** {len(history)}\n\n" +
-            "## Items\n\n" + _table(("Item ID", "Worksheets detected<br>(OK / Total)", "Worksheet detection rate"), rows))
+            "## Items\n\nTarget shows the expected result; sample columns show predictions. `[]` means no tables; `—` means no prediction. Long predictions link to the full item report via `...`.\n\n" +
+            _table(("Item ID", "Worksheets detected<br>(OK / Total)", "Worksheet detection rate", "Target", *sample_headers), rows))
 
     def render_worksheet_detection_report(self, *, dataset, item, history, writer, module_id):
         source = writer.ref("item", module_id, item["id"])
@@ -455,7 +483,7 @@ class DefaultReportRenderer:
                 f"**Worksheet:** {_cell(input_data.get('worksheet_name'))}  \n**Job run ID:** `{writer.root.name}`\n\n"
                 f"**Expected ranges:** {_cell(item.get('ground_truth'))}\n\n## Worksheet Detection Summary\n\n"
                 f"Worksheets detected: {ok} / {total} · Worksheet detection rate: {f'{ok / total:.0%}' if total else '—'}\n\n"
-                "## Worksheet Detections\n\n" + (_table(("Sample", "Run", "Detected ranges", "Exact match"), rows) if rows else "No checks started."))
+                "## Worksheet Detections\n\n" + (_table(("Sample", "Run", "Prediction", "Exact match"), rows) if rows else "No checks started."))
 
 
 class JobReporting:
@@ -468,6 +496,7 @@ class JobReporting:
         self._history = {}
         self._datasets = {}
         self._sample_trials = {}
+        self._reviews = {}
         for module in component.modules:
             self.writer.register_module(module.module_id, filename=Path(module.playbook_name).name,
                                         optimized=module.optimizer_config is not None)
@@ -552,6 +581,11 @@ class JobReporting:
                 outputs = {}
                 if dataset:
                     outputs["Dataset Report"] = writer.ref("dataset", mid).path
+                if mid in self._reviews:
+                    from .review import render_review
+                    writer.write_review_report(mid, render_review(self._reviews[mid], samples=samples,
+                        report=report, module_id=mid, writer=writer, item_count=len(dataset.items) if dataset else None))
+                    outputs["Review Report"] = writer.ref("review", mid).path
                 summary.append({"id": mid, "name": Path(module.playbook_name).name, "optimized": True,
                     "mode": module.optimizer_config.get("mode"), "status": status, "samples": samples,
                     "runs": runs, "selected": selected,
@@ -578,6 +612,35 @@ class JobReporting:
                 artifacts=outputs, writer=writer, module_id=mid))
             writer.write_module_errors(mid, renderer.render_module_errors(errors=errors))
         writer.write_module_summary(renderer.render_module_summary(modules=summary, writer=writer))
+
+    def configure_review(self, module_id, *, entrypoint, settings=None, prompts=None, sources=(), repositories=()):
+        """Capture reproducibility inputs before run(); generate a Review Report during execution."""
+        from .review import capture_review
+        if module_id in self._reviews:
+            raise ValueError(f"Review already configured for {module_id}")
+        module = next(m for m in self.component.modules if m.module_id == module_id)
+        if not module.optimizer_config:
+            raise ValueError("Review requires an optimized module")
+        self._reviews[module_id] = capture_review(self.component, module, entrypoint=entrypoint,
+            settings=settings or {}, prompts=prompts or {}, sources=sources, repositories=repositories)
+        review_ref = self.writer.register_review(module_id)
+        snapshot = self.writer.root / Path(review_ref.path).with_suffix(".json")
+        def redact(value):
+            if isinstance(value, str):
+                for secret in sorted(self.writer._secrets, key=len, reverse=True):
+                    value = value.replace(secret, "[REDACTED]")
+                return value
+            if isinstance(value, dict):
+                return {key: redact(item) for key, item in value.items()}
+            if isinstance(value, list):
+                return [redact(item) for item in value]
+            return value
+        self._reviews[module_id] = redact(self._reviews[module_id])
+        content = json.dumps(self._reviews[module_id], ensure_ascii=False, indent=2)
+        tmp = snapshot.with_name(f".{snapshot.name}.tmp")
+        tmp.write_text(content + "\n", encoding="utf-8")
+        _replace_report(tmp, snapshot)
+        self.refresh()
 
     def register_dataset(self, module_id, dataset):
         self._datasets[module_id] = dataset

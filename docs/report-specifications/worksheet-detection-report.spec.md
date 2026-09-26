@@ -21,11 +21,13 @@ Show Worksheets detected (OK / Total) and Worksheet detection rate for this item
 
 ## Worksheet Detections
 
-| Sample | Run | Detected ranges | Exact match |
+| Sample | Run | Prediction | Exact match |
 |---|---|---|---|
 | 1 | Run report | A6:C13 | Yes |
 
 List the item's runs across samples in execution order. Sample numbers link to Sample Reports, and Run values link to individual Run Reports. Display execution or evaluation errors explicitly rather than treating an unavailable prediction as a valid empty set.
+
+Show the complete prediction without truncation. Dataset Report ellipsis links lead to this report.
 
 Do not include table-detection counters, table-detection rates, or per-table detail sections. This report evaluates the worksheet as a whole.
 

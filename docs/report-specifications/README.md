@@ -8,6 +8,7 @@ These specifications govern Markdown reports for one ZEMI job run. All generated
 - [Module Report](module-report.spec.md)
 - [Module Runs Report](module-runs-report.spec.md)
 - [Dataset Report](dataset-report.spec.md)
+- [Review Report](review-report.spec.md)
 - [Worksheet Detection Report](worksheet-detection-report.spec.md)
 - [Set-based table evaluation](table-detection-evaluation.spec.md)
 - [Module execution pseudocode](module-execution.pseudocode.md)

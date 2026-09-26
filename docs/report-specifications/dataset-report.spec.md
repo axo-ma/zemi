@@ -20,6 +20,9 @@ Show the dataset name, module filename, Job run ID, item count, and sample count
 | Workbook.xlsx::Sheet1 | 8 / 10 | 80% |
 
 - One row per dataset item.
+- Append a separate `Target` column with expected ranges as a JSON array.
+- Append one prediction column per sample, in execution order. Its heading links to the Sample Report and includes the encoding format when available. `[]` means no tables; `—` means a prediction is unavailable. If multiple runs exist for the same item and sample, separate their predictions with semicolons.
+- Limit prediction text to 60 Unicode characters before Markdown escaping. Append a clickable `...` linking to the corresponding Dataset Item Report when the full text is longer. The item report retains the full prediction. Do not truncate Target.
 - Item ID uses meaningful workbook and worksheet names, with relative path disambiguation where necessary, rather than arbitrary labels such as validation-01. Dataset IDs use these names in experiment6.
 - Item ID links to the source workbook; identify the worksheet explicitly. Do not promise direct worksheet navigation unless supported by the viewer.
 - The entire Worksheets detected counter links to the item's separate Worksheet Detection Report in `dataset-items/`.
