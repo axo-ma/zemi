@@ -112,7 +112,7 @@ def render_review(snapshot, *, samples, report, module_id, writer, item_count=No
             values = [(r.get('prediction') or {}).get(key) for r in sruns]
             values = [v for v in values if isinstance(v, (float, int)) and not isinstance(v, bool)]
             return sum(values) / len(values) if values else None
-        sample_id = sample.get('sample_id') or f'Sample {number}'
+        sample_id = sample.get('sample_trial_id') or sample.get('sample_id') or f'Sample {number}'
         label = str(sample_id)
         if sample.get('params'):
             label += ': ' + json.dumps(sample['params'], ensure_ascii=False, sort_keys=True)
