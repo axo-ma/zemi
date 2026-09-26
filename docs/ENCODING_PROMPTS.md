@@ -68,13 +68,14 @@ format. The function must return text. This helper makes no model calls.
 
 ## Review and examples
 
-`zemi.review.configure_review` reads configured bindings automatically. Review
+`ZemiComponent.run()` reads configured bindings automatically for Review Reports. Review
 snapshots contain the selected templates, prompt files and encoder source, in
 addition to the job, params, playbook and provenance. No prompt reconstruction
 from experiment-specific Python code is needed.
 
-The consumer template supports `encoding_prompt` in its playbook and includes
-`params/encoding_example/`. Its example expects a user-supplied
-`data/input.xlsx`, worksheet `Sheet1`. It is an optional concrete-parameter
-launch example, not a replacement for the default Hello request.
-Canonical files are in [examples/encoding_prompt](../examples/encoding_prompt/params.toml).
+The consumer template has separate `example/` and `optimizer_example/` folders,
+each containing a thin `job.py`, a playbook and `params/` with the configuration,
+prompts and encoder. `data/validation/` holds four shared synthetic workbooks
+and a manifest. Initialization stays in the component root. The ordinary
+example uses fixed parameters; the optimizer evaluates four paired choices
+on all four workbook items.

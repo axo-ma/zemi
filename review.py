@@ -11,85 +11,99 @@ from .dataset import zemi_path
 from .reporting import _cell, _table
 
 
-def configure_review(component, entrypoint, *, settings=None, prompts=None,
-                     sources=(), repositories=(), module_id=None):
-    """Configure standard reviews for optimized Modules before execution.
-
-    Components supply only their domain-specific metadata and prompt templates.
-    Model/runtime metadata is collected from the configured Arsenal when present.
-    """
-    import tomllib
-    modules = [m for m in component.modules if m.optimizer_config
-               and (module_id is None or m.module_id == module_id)]
-    if module_id is not None and not modules:
-        raise ValueError(f"No optimized module: {module_id}")
-    for module in modules:
-        collected = {}
-        collected_sources = list(sources)
-        collected_prompts = dict(prompts or {})
-        from .params import ParamSpace
-        from .prompting import validate_binding, load_prompts
-        space = ParamSpace(config=module.config['_v05_space']) if hasattr(module, 'config') else ParamSpace(config=module.params)
-        bindings = [s.values.get('encoding_prompt') for s in space.grid()]
-        prompt_sources = {}
-        for binding in bindings:
-            if binding is None:
-                continue
-            validate_binding(binding)
-            name, file = binding['prompt_name'], binding['prompt_file']
-            if name in prompt_sources and prompt_sources[name] != file:
-                raise ValueError(f'Prompt name {name} refers to different files')
-            prompt_sources[name] = file
-            collected_prompts[name] = load_prompts(file)[name]
-            collected_sources.extend([file, binding['encoder'].rsplit(':', 1)[0]])
-        config_path = module.params.get('arsenal_config_path')
-        if config_path:
-            config = tomllib.loads(zemi_path(config_path).read_text(encoding='utf-8'))
-            collected_sources.append(config_path)
-            for server in config.get('arsenal', {}).get('llamas', []):
-                for model in server.get('models', []):
-                    if model.get('name') == module.params.get('model_name'):
-                        if all(model.get(k) for k in ('owner', 'repository', 'filename')):
-                            collected['Model'] = f"hf:{model['owner']}/{model['repository']}/{model['filename']}"
-                        collected.update({'Runtime': server.get('llama_build'),
-                            'Context size': model.get('ctx_size'),
-                            'Inference threads': model.get('threads'), 'Reasoning': model.get('reasoning')})
-        for key, label in (('temperature', 'Temperature'), ('max_tokens', 'Maximum output tokens')):
-            if key in module.params:
-                collected[label] = module.params[key]
-        collected.update(settings or {})
-        component.reporting.configure_review(module.module_id, entrypoint=entrypoint,
-            settings=collected, prompts=collected_prompts,
-            sources=list(dict.fromkeys(collected_sources)), repositories=repositories)
-
-
 def _git(directory, *args):
     result = subprocess.run(['git', '-c', f'safe.directory={Path(directory).as_posix()}', '-C', str(directory), *args], capture_output=True,
                             encoding='utf-8', timeout=15)
     return result.stdout.strip() if result.returncode == 0 else None
 
 
-def capture_review(component, module, *, entrypoint, settings, prompts, sources, repositories):
-    entry = zemi_path(entrypoint).resolve()
-    paths = [component.params_path, module.source_path, entry, *(zemi_path(p) for p in sources)]
-    files = {p.relative_to(component.root).as_posix(): p.read_text(encoding='utf-8')
-             for p in dict.fromkeys(paths)}
+def capture_review(component, module, dataset):
+    """Collect launch provenance solely from resolved configuration."""
+    import hashlib
+    import tomllib
+    from .params import ParamSpace
+    from .prompting import validate_binding, load_prompts
+
+    entry = Path(sys.argv[0]).resolve()
+    if not entry.is_file() or not entry.is_relative_to(component.root):
+        entry = None
+    paths = [component.params_path, module.source_path]
+    if entry is not None:
+        paths.append(entry)
+    configuration, prompts = {}, {}
+    prompt_files = {}
+    space = ParamSpace(config=module.config['_v05_space'])
+    for sample in space.grid():
+        binding = sample.values.get('encoding_prompt')
+        if binding is None:
+            continue
+        validate_binding(binding)
+        name, file = binding['prompt_name'], binding['prompt_file']
+        if name in prompt_files and prompt_files[name] != file:
+            raise ValueError(f'Prompt name {name} refers to different files')
+        prompt_files[name] = file
+        prompts[name] = load_prompts(file)[name]
+        paths.extend([zemi_path(file), zemi_path(binding['encoder'].rsplit(':', 1)[0])])
+    optimizer = module.optimizer_config
+    dataset_ref = optimizer.get('trial_dataset', {}).get('path')
+    if dataset_ref:
+        paths.append(zemi_path(dataset_ref))
+        configuration['Dataset'] = dataset_ref
+    trial_type = optimizer.get('sample_trial', {}).get('type')
+    if trial_type:
+        configuration['SampleTrial'] = trial_type
+        if trial_type.startswith(('@comp/', '@inst/')):
+            paths.append(zemi_path(trial_type.rsplit(':', 1)[0]))
+    config_path = module.params.get('arsenal_config_path')
+    if config_path and zemi_path(config_path).is_file():
+        config_file = zemi_path(config_path)
+        paths.append(config_file)
+        config = tomllib.loads(config_file.read_text(encoding='utf-8'))
+        for server in config.get('arsenal', {}).get('llamas', []):
+            for model in server.get('models', []):
+                if model.get('name') == module.params.get('model_name'):
+                    if all(model.get(k) for k in ('owner', 'repository', 'filename')):
+                        configuration['Model'] = f"hf:{model['owner']}/{model['repository']}/{model['filename']}"
+                    configuration.update({'Runtime': server.get('llama_build'),
+                        'Context size': model.get('ctx_size'), 'Inference threads': model.get('threads'),
+                        'Reasoning': model.get('reasoning')})
+    for key, label in (('model_name', 'Model alias'), ('temperature', 'Temperature'), ('max_tokens', 'Maximum output tokens')):
+        if key in module.params:
+            configuration[label] = module.params[key]
+
+    def relative(file):
+        file = Path(file).resolve()
+        if file.is_relative_to(component.root):
+            return file.relative_to(component.root).as_posix()
+        return '@inst/' + file.relative_to(env.path.inst).as_posix()
+
+    files = {relative(p): p.read_text(encoding='utf-8') for p in dict.fromkeys(paths) if p.is_file()}
+    data_files, directories = {}, [component.root, component.root / 'zemi']
+    for item in dataset.items:
+        ref = item.get('input', {}).get('workbook_path')
+        if ref:
+            file = zemi_path(ref)
+            data_files[ref] = hashlib.sha256(file.read_bytes()).hexdigest()
+            directory = _git(file.parent, 'rev-parse', '--show-toplevel')
+            if directory:
+                directories.append(Path(directory))
     repos = []
-    for directory in dict.fromkeys([component.root, component.root / 'zemi', *(zemi_path(p) for p in repositories)]):
+    for directory in dict.fromkeys(directories):
         directory = Path(directory).resolve()
         if not directory.is_dir():
-            raise FileNotFoundError(directory)
+            continue
         status = _git(directory, 'status', '--porcelain')
         repos.append({'directory': directory.relative_to(env.path.inst).as_posix(),
                       'remote': _git(directory, 'remote', 'get-url', 'origin'),
                       'commit': _git(directory, 'rev-parse', 'HEAD'),
                       'dirty': bool(status) if status is not None else None})
     python = Path(sys.executable).resolve().relative_to(env.path.inst).as_posix()
-    return {'schema_version': 1, 'entrypoint': entry.relative_to(component.root).as_posix(),
+    return {'schema_version': 2, 'entrypoint': relative(entry) if entry else None,
             'component_directory': component.root.relative_to(env.path.inst).as_posix(),
-            'python': python, 'params_file': component.params_path.relative_to(component.root).as_posix(),
-            'playbook': module.playbook_name, 'optimizer': module.optimizer_config,
-            'settings': settings, 'prompts': prompts, 'sources': files, 'repositories': repos}
+            'python': python, 'params_file': relative(component.params_path),
+            'playbook': module.playbook_name, 'optimizer': optimizer,
+            'configuration': configuration, 'prompts': prompts, 'sources': files,
+            'data_files': data_files, 'repositories': repos}
 
 
 def _fence(text, language='text'):
@@ -103,7 +117,7 @@ def render_review(snapshot, *, samples, report, module_id, writer, item_count=No
     settings = [('Run', writer.root.name), ('Status', report['status']),
                 ('Started', report.get('started_at')), ('Finished', report.get('finished_at')),
                 ('Job', snapshot['entrypoint']), ('Parameters', snapshot['params_file']),
-                ('Playbook', snapshot['playbook']), *snapshot['settings'].items(),
+                ('Playbook', snapshot['playbook']), *snapshot['configuration'].items(),
                 ('Optimizer', snapshot['optimizer'].get('strategy')),
                 ('Maximum samples', snapshot['optimizer'].get('max_trials')),
                 ('Reuse kernel', snapshot['optimizer'].get('reuse_kernel', True)),
@@ -120,8 +134,13 @@ def render_review(snapshot, *, samples, report, module_id, writer, item_count=No
             commands.extend([f"git clone '{repo['remote']}' '{repo['directory']}'",
                              f"git -C '{repo['directory']}' checkout {repo['commit']}",
                              f"git -C '{repo['directory']}' submodule update --init --recursive"])
-    commands += [f"cd '{snapshot['component_directory']}'", 'python 00_init.py',
-                 f"& '../{snapshot['python']}' '{snapshot['entrypoint']}'"]
+    commands += [f"cd '{snapshot['component_directory']}'", 'python 00_init.py']
+    if snapshot['entrypoint']:
+        commands.append(f"& '../{snapshot['python']}' '{snapshot['entrypoint']}'")
+    else:
+        code = (f"from zemi.component import ZemiComponent; c = ZemiComponent('@comp/{snapshot['params_file']}'); "
+                "exec('try:\\n    c.run()\\nfinally:\\n    c.close()')")
+        commands.append(f'& "../{snapshot["python"]}" -c "{code}"')
     rows = []
     for number, sample in enumerate(samples, 1):
         sruns = sample.get('runs', [])

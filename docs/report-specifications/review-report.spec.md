@@ -1,66 +1,57 @@
 # Review Report
 
-Configure before `component.run()` using
-`zemi.review.configure_review(component, entrypoint, settings=..., prompts=...,
-sources=..., repositories=...)`. The standard helper configures every optimized
-Module, including `start_only`; plain Modules are skipped. Use `module_id` to
-select one optimized Module. The component template calls this helper by default.
-The lower-level `component.reporting.configure_review(...)` remains available.
+ZEMI automatically creates a Review Report for each enabled optimized Module,
+including `start_only`, during `ZemiComponent.run()`. The job only selects a
+parameter TOML, runs the component and closes it. There is no manual review
+configuration API, settings table or source/repository list in the job or TOML.
 
-The helper collects model identifier, runtime, context, threads and reasoning
-from the matching model in the supplied `arsenal_config_path` managed llama
-configuration, and temperature/max_tokens from Module parameters. It snapshots
-that configuration automatically. Domain-specific settings and prompt templates
-are supplied by the component; supplied settings override collected settings.
-No Arsenal activation or model calls occur during review setup.
-Path arguments use `@comp/` or `@inst/`. No new Params structural sections or
-optimization dimensions are introduced.
+One `<module_id>.review.md` report is linked from its Module Report. It refreshes
+through the standard lifecycle, including partial and failed Runs. ReportWriter
+owns filenames, navigation, redaction and atomic writes.
 
-One `<module_id>.review.md` report is generated for each configured optimized
-module, and linked from its Module Report. It is refreshed through the normal
-report lifecycle, including partial or failed runs. ReportWriter owns its
-filename, navigation, secret redaction and atomic writes.
+## Authoritative inputs
 
-## Saved inputs
+All inputs are collected from resolved configuration:
 
-Before execution, write `<module_id>.review.json`: job and Python paths,
-parameter file, playbook, optimizer configuration, supplied settings,
-full prompt templates (including examples), source file contents and Git
-remote/HEAD/dirty state for the component, library and supplied repositories.
-Source snapshots include the entrypoint, params and playbook automatically.
-Additional sources should include prompt specifications, encoding modules,
-dataset manifest and model configuration. Known secret values are redacted.
-Do not reconstruct missing Git commits from dates.
+- selected `params.toml` and configured playbook;
+- named templates and examples from `encoding_prompt.prompt_file`;
+- encoder sources from `encoding_prompt.encoder`;
+- dataset manifest from `optimizer.trial_dataset.path`;
+- SampleTrial implementation from `optimizer.sample_trial.type`;
+- configured Arsenal file and model/runtime parameters;
+- executing job, when it is a real file inside the component.
+
+Prompts and examples vary through paired `encoding_prompt` parameter choices.
+No report-only prompt metadata or generated prompt descriptions are required.
+
+## Saved snapshot
+
+Before Arsenal starts, ZEMI writes `<module_id>.review.json` with the selected
+source text, complete templates, optimizer/runtime configuration and actual
+Git remote/HEAD/dirty state. Repository provenance includes the component,
+its bundled library and repositories owning workbook inputs. Source paths
+outside the component use `@inst/`. Workbook bytes are represented by SHA-256
+checksums. Known secrets are redacted. No missing commits are guessed.
+
+The snapshot is authoritative for what was collected at launch. A dirty
+checkout needs its saved source snapshot in addition to the recorded commit.
+Imported dependencies are reproduced through the recorded repositories and
+configured environment; they are not recursively copied into the snapshot.
 
 ## Markdown layout
 
-1. `Run configuration`: Setting / Value table, including run ID, status,
-   timestamps, job, params, playbook, model/runtime settings, actual item,
-   sample and run counts, repository commits and dirty state at launch.
-2. `Reproduction`: PowerShell clone, exact checkout, submodule initialization,
-   component environment initialization and selected Python job command.
-   Run these commands from a ZEMI Instance root. Required environment/model/runtime
-   settings remain explicit. A dirty checkout requires the saved source snapshot.
-3. `Results`: Sample / parameters / Score / Mean item tokens /
-   Mean prompt tokens / Evaluator errors. One row per started sample.
-   Score is the SampleTrial score. Each token mean uses available numeric
-   run outputs. No values produces `—`. Display floats to three decimals.
-4. `Prompts and examples`: one full saved template per supplied format.
-5. Link to the launch-time JSON source snapshot.
+1. `Run configuration`: Setting / Value table with actual run status, dates,
+   job/params/playbook, model/runtime, optimizer, dataset/SampleTrial, item,
+   Sample and Run counts, Git commits and dirty state.
+2. `Reproduction`: clone, exact checkout, submodule initialization, component
+   environment initialization and configured Python job command. If launched
+   programmatically without a component job file, show a direct Python command
+   using the selected parameter file.
+3. `Results`: Sample / parameters, Score, Mean item tokens, Mean prompt tokens,
+   Evaluator errors. One row per started Sample. Score is the SampleTrial score.
+   Means use available numeric outputs; missing values show `—`. Float values
+   use three decimals. Counts and labels come from the actual results.
+4. `Prompts and examples`: full templates loaded from configured bindings.
+5. Link to the launch-time JSON snapshot.
 
 No comparison-run score, change column or generated narrative analysis.
-
-## Example
-
-```python
-from zemi.review import configure_review
-
-configure_review(
-    component, "@comp/job.py", module_id="detect-tables",
-    settings={"Output format": '{"ranges":[...]}'},
-    prompts={"cell_all": prompt_template},
-    sources=["@comp/encoding.py", "@comp/prompts.md"],
-    repositories=["@inst/zemi_tests"],
-)
-component.run()
-```

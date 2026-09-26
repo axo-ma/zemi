@@ -1148,6 +1148,12 @@ class ZemiComponent:
         first_error: BaseException | None = None
         try:
             prepared = self._prepare_sample_trials()
+            from .review import capture_review
+            for module in self.modules:
+                if module.enabled and module.optimizer_config:
+                    dataset, _ = prepared[module.playbook_id]
+                    self.reporting.register_review(module.module_id,
+                        capture_review(self, module, dataset))
         except Exception as error:
             self.report.record_failure(error)
             raise

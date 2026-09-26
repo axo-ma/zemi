@@ -621,16 +621,9 @@ class JobReporting:
             writer.write_module_errors(mid, renderer.render_module_errors(errors=errors))
         writer.write_module_summary(renderer.render_module_summary(modules=summary, writer=writer))
 
-    def configure_review(self, module_id, *, entrypoint, settings=None, prompts=None, sources=(), repositories=()):
-        """Capture reproducibility inputs before run(); generate a Review Report during execution."""
-        from .review import capture_review
-        if module_id in self._reviews:
-            raise ValueError(f"Review already configured for {module_id}")
-        module = next(m for m in self.component.modules if m.module_id == module_id)
-        if not module.optimizer_config:
-            raise ValueError("Review requires an optimized module")
-        self._reviews[module_id] = capture_review(self.component, module, entrypoint=entrypoint,
-            settings=settings or {}, prompts=prompts or {}, sources=sources, repositories=repositories)
+    def register_review(self, module_id, snapshot):
+        """Save the automatically collected launch snapshot."""
+        self._reviews[module_id] = snapshot
         review_ref = self.writer.register_review(module_id)
         snapshot = self.writer.root / Path(review_ref.path).with_suffix(".json")
         def redact(value):
