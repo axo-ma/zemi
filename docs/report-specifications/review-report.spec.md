@@ -1,8 +1,18 @@
 # Review Report
 
 Configure before `component.run()` using
-`component.reporting.configure_review(module_id, entrypoint=..., settings=...,
-prompts=..., sources=..., repositories=...)`.
+`zemi.review.configure_review(component, entrypoint, settings=..., prompts=...,
+sources=..., repositories=...)`. The standard helper configures every optimized
+Module, including `start_only`; plain Modules are skipped. Use `module_id` to
+select one optimized Module. The component template calls this helper by default.
+The lower-level `component.reporting.configure_review(...)` remains available.
+
+The helper collects model identifier, runtime, context, threads and reasoning
+from the matching model in the supplied `arsenal_config_path` managed llama
+configuration, and temperature/max_tokens from Module parameters. It snapshots
+that configuration automatically. Domain-specific settings and prompt templates
+are supplied by the component; supplied settings override collected settings.
+No Arsenal activation or model calls occur during review setup.
 Path arguments use `@comp/` or `@inst/`. No new Params structural sections or
 optimization dimensions are introduced.
 
@@ -31,7 +41,7 @@ Do not reconstruct missing Git commits from dates.
    component environment initialization and selected Python job command.
    Run these commands from a ZEMI Instance root. Required environment/model/runtime
    settings remain explicit. A dirty checkout requires the saved source snapshot.
-3. `Results`: Encoding and prompt / Score / Mean item tokens /
+3. `Results`: Sample / parameters / Score / Mean item tokens /
    Mean prompt tokens / Evaluator errors. One row per started sample.
    Score is the SampleTrial score. Each token mean uses available numeric
    run outputs. No values produces `—`. Display floats to three decimals.
@@ -43,9 +53,10 @@ No comparison-run score, change column or generated narrative analysis.
 ## Example
 
 ```python
-component.reporting.configure_review(
-    "detect-tables",
-    entrypoint="@comp/job.py",
+from zemi.review import configure_review
+
+configure_review(
+    component, "@comp/job.py", module_id="detect-tables",
     settings={"Output format": '{"ranges":[...]}'},
     prompts={"cell_all": prompt_template},
     sources=["@comp/encoding.py", "@comp/prompts.md"],

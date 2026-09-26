@@ -11,6 +11,41 @@ from .dataset import zemi_path
 from .reporting import _cell, _table
 
 
+def configure_review(component, entrypoint, *, settings=None, prompts=None,
+                     sources=(), repositories=(), module_id=None):
+    """Configure standard reviews for optimized Modules before execution.
+
+    Components supply only their domain-specific metadata and prompt templates.
+    Model/runtime metadata is collected from the configured Arsenal when present.
+    """
+    import tomllib
+    modules = [m for m in component.modules if m.optimizer_config
+               and (module_id is None or m.module_id == module_id)]
+    if module_id is not None and not modules:
+        raise ValueError(f"No optimized module: {module_id}")
+    for module in modules:
+        collected = {}
+        collected_sources = list(sources)
+        config_path = module.params.get('arsenal_config_path')
+        if config_path:
+            config = tomllib.loads(zemi_path(config_path).read_text(encoding='utf-8'))
+            collected_sources.append(config_path)
+            for server in config.get('arsenal', {}).get('llamas', []):
+                for model in server.get('models', []):
+                    if model.get('name') == module.params.get('model_name'):
+                        if all(model.get(k) for k in ('owner', 'repository', 'filename')):
+                            collected['Model'] = f"hf:{model['owner']}/{model['repository']}/{model['filename']}"
+                        collected.update({'Runtime': server.get('llama_build'),
+                            'Context size': model.get('ctx_size'),
+                            'Inference threads': model.get('threads'), 'Reasoning': model.get('reasoning')})
+        for key, label in (('temperature', 'Temperature'), ('max_tokens', 'Maximum output tokens')):
+            if key in module.params:
+                collected[label] = module.params[key]
+        collected.update(settings or {})
+        component.reporting.configure_review(module.module_id, entrypoint=entrypoint,
+            settings=collected, prompts=prompts, sources=collected_sources, repositories=repositories)
+
+
 def _git(directory, *args):
     result = subprocess.run(['git', '-c', f'safe.directory={Path(directory).as_posix()}', '-C', str(directory), *args], capture_output=True,
                             encoding='utf-8', timeout=15)
@@ -55,7 +90,7 @@ def render_review(snapshot, *, samples, report, module_id, writer, item_count=No
                 ('Optimizer', snapshot['optimizer'].get('strategy')),
                 ('Maximum samples', snapshot['optimizer'].get('max_trials')),
                 ('Reuse kernel', snapshot['optimizer'].get('reuse_kernel', True)),
-                ('Worksheets', item_count), ('Samples', len(samples)),
+                ('Dataset items', item_count), ('Samples', len(samples)),
                 ('Successful runs / Total', f"{sum(r.get('status') == 'succeeded' for r in runs)} / {len(runs)}")]
     settings.extend((f"Commit: {repo['directory']}", repo['commit']) for repo in snapshot['repositories'])
     settings.extend((f"Dirty at launch: {repo['directory']}", repo['dirty']) for repo in snapshot['repositories'])
@@ -77,14 +112,16 @@ def render_review(snapshot, *, samples, report, module_id, writer, item_count=No
             values = [(r.get('prediction') or {}).get(key) for r in sruns]
             values = [v for v in values if isinstance(v, (float, int)) and not isinstance(v, bool)]
             return sum(values) / len(values) if values else None
-        label = sample.get('params', {}).get('encoding_format') or f'Sample {number}'
+        label = sample.get('params', {}).get('encoding_format') or (
+            json.dumps(sample['params'], ensure_ascii=False, sort_keys=True)
+            if sample.get('params') else f'Sample {number}')
         rows.append((label, sample.get('score'), mean('item_tokens'), mean('prompt_tokens'),
                      sum(bool(r.get('evaluation_error')) for r in sruns)))
     parts = ['## Run configuration', _table(('Setting', 'Value'), settings), '## Reproduction',
              'The instance requires the configured Python environment, model and runtime. '
              'Commits describe the checkout at launch; dirty checkouts additionally require the saved source snapshot.',
              _fence('\n'.join(commands), 'powershell'), '## Results',
-             _table(('Encoding and prompt', 'Score', 'Mean item tokens', 'Mean prompt tokens', 'Evaluator errors'), rows),
+             _table(('Sample / parameters', 'Score', 'Mean item tokens', 'Mean prompt tokens', 'Evaluator errors'), rows),
              'Score is the SampleTrial score. Token means use available numeric outputs; unavailable values are shown as —.',
              '## Prompts and examples']
     for name, prompt in snapshot['prompts'].items():
