@@ -58,7 +58,7 @@ __include__ = { ref = "component.params.generation" }
 locale = { ref = "system.params.locale" }
 device = { ref = "arsenals.local.params.device" }
 temperature = { values = [0.0, 0.2, 0.5], start = 0.2 }
-prompt_style = { values = ["brief", "detailed"], start = "brief" }
+prompt_style = { values = ["brief", "detailed"] }
 
 [modules.optimizer]
 mode = "optimize"
@@ -88,8 +88,8 @@ __include__ = [
   { ref = "component.params.generation" },
 ]
 device = { ref = "arsenals.remote.params.device" }
-schema_mode = { values = ["strict", "repair"], start = "strict" }
-temperature = { range = { min = 0.0, max = 0.4, step = 0.2 }, start = 0.0 }
+schema_mode = { values = ["strict", "repair"] }
+temperature = { range = { min = 0.0, max = 0.4, step = 0.2 } }
 
 [modules.optimizer]
 mode = "optimize"

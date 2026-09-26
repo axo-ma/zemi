@@ -25,10 +25,12 @@ between packages. No new structural sections are introduced in Params 0.6.
 encoding_prompt = { values = [
     { prompt_name = "cells", prompt_file = "@comp/params/encoding_example/prompts.md", encoder = "@comp/params/encoding_example/encoder.py:encode", encoding_format = "cells" },
     { prompt_name = "cells_compact", prompt_file = "@comp/params/encoding_example/prompts.md", encoder = "@comp/params/encoding_example/encoder.py:encode", encoding_format = "cells_compact" },
-], start = { prompt_name = "cells", prompt_file = "@comp/params/encoding_example/prompts.md", encoder = "@comp/params/encoding_example/encoder.py:encode", encoding_format = "cells" } }
+] }
 ```
 
-`values` and `start` follow the existing ParamSpace contract. Each object is
+`start` is optional: the first object in `values` is the complete starting
+binding, also in `start_only`. List order therefore matters. An explicit
+`start` must equal one of the objects in `values` and overrides this default. Each object is
 one indivisible choice; its fields do not become independent dimensions.
 A fixed `encoding_prompt` object is supported too.
 

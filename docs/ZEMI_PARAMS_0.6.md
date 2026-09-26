@@ -24,7 +24,7 @@ arsenal = "local-llm" # optional
 
 [modules.params]
 worksheet_name = "Данные"
-temperature = { values = [0.0, 0.2], start = 0.0 }
+temperature = { values = [0.0, 0.2] }
 
 [modules.optimizer]
 mode = "optimize"
@@ -40,6 +40,35 @@ path = "@comp/data/experiment5/validation.json"
 
 Only `kind = "playbook"` has a runtime in 0.6. Other kinds are rejected clearly;
 the Module contract permits adding them later without pretending they work now.
+
+## Variable dimensions and optional start
+
+Variable wrappers contain either `values` or `range`, plus an optional `start`.
+When `start` is absent, `values` uses its first element and `range` uses `min`.
+An explicit `start` takes priority and must belong to the generated domain.
+`values` must be a non-empty array of unique finite JSON-compatible values.
+`range` requires finite numeric `min <= max` and `step > 0`; its domain is
+`min + n * step` up to `max`, inclusive when reached. A start between steps
+is invalid even when it lies between `min` and `max`.
+
+```toml
+temperature = { values = [0.0, 0.2, 0.5] } # start = 0.0
+temperature = { range = { min = 0.0, max = 1.0, step = 0.2 } } # start = 0.0
+temperature = { values = [0.0, 0.2, 0.5], start = 0.2 } # explicit override
+```
+
+These are alternative definitions, not entries to combine in one TOML table.
+Objects and arrays are indivisible choices: the complete first object (for
+example, an `encoding_prompt` binding) becomes the start without duplication
+in the configuration. ParamSpace copies values so samples remain independent.
+
+The order of `values` determines the implicit start, including in `start_only`.
+Grid visits the complete start sample first, then the Cartesian product in
+parameter declaration and domain order, skipping the start already visited.
+Omitting `start` produces the same traversal and optimizer behavior as explicitly
+specifying that default. Random, coordinate, and block-coordinate strategies
+also begin with that start and never propose an already observed sample.
+Resolution and structural validation contracts are unchanged.
 
 ## Structural and resolution rules
 
@@ -69,7 +98,7 @@ mode = { select = ["optimize", "start_only"] }
 ```
 
 - Concrete Module params without an optimizer execute the Module once.
-- `start_only` executes one complete SampleTrial at the declared start sample,
+- `start_only` executes one complete SampleTrial at the explicit or default start sample,
   including dataset runs, evaluation, history, best sample, and report.
 - `optimize` runs the full score-maximizing loop.
 

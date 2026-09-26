@@ -388,9 +388,8 @@ class ParamSpace:
 
 
 def _dimension(name: str, raw: Mapping[str, Any], label: str) -> ParamDimension:
-    if set(raw) not in ({"values", "start"}, {"range", "start"}):
-        raise ValueError(f"{label} variable wrapper must contain exactly values/start or range/start")
-    start = _json_copy(raw["start"], f"{label}.start")
+    if set(raw) not in ({"values"}, {"values", "start"}, {"range"}, {"range", "start"}):
+        raise ValueError(f"{label} variable wrapper must contain exactly values or range, with optional start")
     if "values" in raw:
         if not isinstance(raw["values"], list) or not raw["values"]:
             raise ValueError(f"{label}.values must be a non-empty array")
@@ -406,6 +405,7 @@ def _dimension(name: str, raw: Mapping[str, Any], label: str) -> ParamDimension:
         values = tuple(low + index * step for index in range(count + 1))
     keys = [json.dumps(value, sort_keys=True, ensure_ascii=False) for value in values]
     if len(keys) != len(set(keys)): raise ValueError(f"{label} domain values must be unique")
+    start = _json_copy(raw["start"] if "start" in raw else values[0], f"{label}.start")
     start_key = json.dumps(start, sort_keys=True, ensure_ascii=False)
     if start_key not in keys: raise ValueError(f"{label}.start must be a member of its domain")
     return ParamDimension(name, values, start)

@@ -40,7 +40,12 @@ scopes only through explicit `ref` or `__include__`. Resolution is deterministic
 deep-copying, cycle-checked, and complete before ParamSpace construction.
 
 Plain values are fixed. `select` and `input` resolve once to fixed values.
-`values/start` and `range/start` create variable dimensions. Full rules are in
+`values` and `range` create variable dimensions with optional `start`. An omitted
+start selects the first `values` element or the range `min`; an explicit start
+must belong to the domain. Composite choices remain whole objects. Domain order
+determines the implicit start in both optimization and `start_only`. All
+optimizers begin with the complete start sample without executing it twice;
+omitted starts behave identically to their explicit defaults. Full rules are in
 [ZEMI Params 0.6](ZEMI_PARAMS_0.6.md).
 
 ## Fixed and optimized execution
