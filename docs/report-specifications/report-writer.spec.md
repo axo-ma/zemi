@@ -21,7 +21,7 @@ Paths below are relative to the job run directory. Sample Reports reside in `sam
 |---|---|---|---|---|---|
 | Job Report | `index.md` | One per job execution | Yes | Yes | Yes |
 | Module Report | `<module_id>.md` | One per configured module | Yes | Yes | Yes |
-| Module Runs Report | `<module_id>.runs.md` | One per module with an optimizer | No | Yes | Yes |
+| Module Runs Report | `<module_id>.runs.md` | One per module with started runs | Yes | Yes | Yes |
 | Sample Report | `samples/<sample_id>.md` | One per started sample | No | Starting sample | Each started sample |
 | Run Report | `runs/<run_id>.md` | One per started run | Single run when started | Each started run | Each started run |
 | Dataset Report | `<module_id>.dataset.md` | One per module with a trial dataset | No | Yes | Yes |
@@ -46,13 +46,13 @@ ReportWriter supplies a common document envelope: report title, owning job/modul
 - Job Report links to Module Reports.
 - Module Report without an optimizer links to its single Run Report and directly to available output IPYNB. Automatic notebook HTML export is removed.
 - Module Report with an optimizer links to Sample Reports and the Dataset Report when applicable. Module Optimization Progress are included in the Module Report itself.
-- Sample Report links to its Run Reports and back to its Module Report.
-- Run Report links to its Sample Report when owned by a sample, otherwise directly to its Module Report. It also links to its Module Report and Job Report where useful.
+- Sample Report has exactly one top navigation link: Back to Module Report. Run links remain in its Runs table.
+- Run Report has exactly one top navigation link: Back to Runs Report. This applies with and without an optimizer; a single-run module also gets a Runs Report.
 - Dataset Reports link back to their Module Report.
 - Reproduction Reports link to their Module and Job Reports; Module artifacts link to Reproduction Reports. `write_review_report(module_id, md_fragment)` replaces the review fragment. See [Reproduction Report](reproduction-report.spec.md) for its launch-time source snapshot.
-- Every report is identifiable when opened directly and provides a relative link to the Job Report: `index.md` from the root, or `../index.md` from `samples/`, `runs/`, and `dataset-items/`. Resolve all other navigation relative to the source report location as well.
+- Every report is identifiable when opened directly. Module Runs has exactly one top link, Back to Module Report; Dataset Item has exactly one top link, Back to Dataset Report. Job, Module, Dataset and Reproduction navigation is unchanged. Resolve destinations from registered references, relative to the source file.
 
-Parent/run link lists are managed navigation, not domain layouts inferred by ReportWriter.
+Navigation is managed by ReportWriter. Sample headers contain no generated child-run link lists; those links belong in the content tables.
 
 ## 4. MD Fragment Registry
 

@@ -20,3 +20,5 @@ Run Reports; outputs are preserved there in full.
 Metrics follow the shared slash format: names only in the header, values in
 the same order in rows, `—` for missing values. The list is derived from data.
 TableDetectionSampleTrial uses this common renderer, not a special table.
+
+Top navigation contains exactly one link: **Back to Module Report**. No Job or individual Run links appear in the header. Links in the Runs table are retained.

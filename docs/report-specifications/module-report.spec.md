@@ -87,13 +87,13 @@ Expose stable anchor `samples` for links from the Samples counter in Job Report.
 
 One row per started sample, in execution order:
 
-| Sample | Parameters<br>temperature / top_p / top_k | Score ↑ | Status | Metrics<br>precision / recall / f1 | Runs<br>(OK / Total) | Mean item tokens | Mean prompt tokens | Duration |
-|---|---|---:|---|---|---:|---:|---:|---|
-| [1](samples/table_detection-sample-001.md) | 0.0 / 0.9 / 40 | 0.89 | Succeeded | 0.91 / 0.87 / 0.89 | [20 / 20](table_detection.runs.md#sample-001) | 300.000 | 900.000 | 0m 52s |
-| [2](samples/table_detection-sample-002.md) | 0.3 / 0.95 / 50 | 0.94 | Succeeded | 0.96 / 0.92 / 0.94 | [20 / 20](table_detection.runs.md#sample-002) | 300.000 | 900.000 | 0m 50s |
-| [3](samples/table_detection-sample-003.md) | 0.6 / 1.0 / 60 | — | Failed | — / — / — | [7 / 8](table_detection.runs.md#sample-003) | — | — | 0m 23s |
+| Sample | Parameters<br>temperature / top_p / top_k | Score ↑ | Status | Metrics<br>precision / recall / f1 | Runs<br>(OK / Total) | Mean Tokens<br>(item / prompt) | Duration<br>(module / LM) |
+|---|---|---:|---|---|---:|---|---|
+| [1](samples/table_detection-sample-001.md) | 0.0 / 0.9 / 40 | 0.89 | Succeeded | 0.91 / 0.87 / 0.89 | [20 / 20](table_detection.runs.md#sample-001) | 300.000 / 900.000 | 0m 52s / 0m 40s |
+| [2](samples/table_detection-sample-002.md) | 0.3 / 0.95 / 50 | 0.94 | Succeeded | 0.96 / 0.92 / 0.94 | [20 / 20](table_detection.runs.md#sample-002) | 300.000 / 900.000 | 0m 50s / 0m 38s |
+| [3](samples/table_detection-sample-003.md) | 0.6 / 1.0 / 60 | — | Failed | — / — / — | [7 / 8](table_detection.runs.md#sample-003) | — / — | 0m 23s / — |
 
-Column order is fixed: Sample, Parameters, Score, Status, Metrics, Runs, Mean item tokens, Mean prompt tokens, Duration. The example values are illustrative. Show the score direction only when known from the evaluation contract.
+Column order is fixed: Sample, Parameters, Score, Status, Metrics, Runs, Mean Tokens (item / prompt), Duration (module / LM). The example values are illustrative. Show the score direction only when known from the evaluation contract.
 
 - Sample displays only its one-based sequence number within this module, linked to its Sample Report. Keep the complete identifier in that detailed report and in the internal report reference. Resolve actual filenames through registered references; the links above are illustrative.
 - Runs displays its entire counter as a link to that sample's section in `<module_id>.runs.md`, for example `table_detection.runs.md#sample-002`. Parameters, Score, Status, Metrics, and Duration are plain values, not links.
@@ -148,4 +148,4 @@ This document defines report presentation without changing execution semantics.
 
 ## Updated result presentation
 
-Variable parameter Value is `—`; Fixed values remain complete. Sample names and slash-form metric presentation remain unchanged. Samples include Mean item tokens and Mean prompt tokens, averaged over available numeric run outputs; missing means are `—`. Duration is formatted as minutes/seconds or hours/minutes. LM Time remains seconds.
+Variable parameter Value is `—`; Fixed values remain complete. Sample names and slash-form metric presentation remain unchanged. Samples include one Mean Tokens column with item / prompt means, averaged independently over available numeric run outputs. Missing means are `—`. Duration (module / LM) shows total execution time for this sample / the sum of available numeric lm_time outputs across its runs. Both duration values use minutes/seconds or hours/minutes. Missing LM measurements are `—`; an available zero is `0m 00s`. Individual LM Time outputs remain seconds. Booleans are not numeric measurements.

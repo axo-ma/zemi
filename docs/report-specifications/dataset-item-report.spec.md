@@ -17,3 +17,5 @@ No metric names, input fields or prediction keys are prescribed by the task.
 
 Standalone TrialDataset rendering uses this same layout. There are no
 Worksheet Detection, Expected ranges or task-specific summary sections.
+
+Top navigation contains exactly one link: **Back to Dataset Report**. Links in Results remain unchanged.

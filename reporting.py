@@ -74,6 +74,12 @@ def _mean_output(runs, name):
     return sum(values) / len(values) if values else None
 
 
+def _lm_duration(runs):
+    values = [run['prediction'].get('lm_time') for run in runs if isinstance(run.get('prediction'), Mapping)]
+    values = [value for value in values if isinstance(value, (int, float)) and not isinstance(value, bool)]
+    return _duration_text(sum(values)) if values else None
+
+
 def _comparison(run):
     return run.get("comparison_prediction", run.get("prediction"))
 
@@ -235,6 +241,8 @@ class ReportWriter:
         return ref
 
     def register_run(self, module_id, run_id, *, sample_id=None):
+        if self.ref("module_runs", module_id) is None:
+            self.register_module_runs(module_id)
         key = ("run", module_id, run_id)
         if key in self._refs:
             return self._refs[key]
@@ -304,20 +312,16 @@ class ReportWriter:
         else:
             title, order = f"Run: {key[2]}", ("run_report",)
         navigation = []
-        if key[0] != "job":
+        if key[0] in {"sample", "module_runs"}:
+            navigation.append(_link("Back to Module Report", self.href(ref, self.ref("module", key[1]))))
+        elif key[0] == "run":
+            navigation.append(_link("Back to Runs Report", self.href(ref, self.ref("module_runs", key[1]))))
+        elif key[0] == "item":
+            navigation.append(_link("Back to Dataset Report", self.href(ref, self.ref("dataset", key[1]))))
+        elif key[0] != "job":
             navigation.append(_link("Back to job report", self.href(ref, self.ref("job"))))
             if len(key) > 1 and key[0] != "module":
                 navigation.append(_link("Module Report", self.href(ref, self.ref("module", key[1]))))
-            if key[0] == "run":
-                parent = self._parents.get(key)
-                if parent is not None:
-                    navigation.append(_link("Sample Report", self.href(ref, self.ref("sample", key[1], parent))))
-            if key[0] == "item":
-                navigation.append(_link("Dataset Report", self.href(ref, self.ref("dataset", key[1]))))
-            if key[0] == "sample":
-                for run_key, parent in self._parents.items():
-                    if run_key[1] == key[1] and parent == key[2]:
-                        navigation.append(_link(f"Run {run_key[2]}", self.href(ref, self._refs[run_key])))
         body = [f"# {title}", ""]
         if navigation:
             body.extend((" · ".join(navigation), ""))
@@ -425,7 +429,7 @@ class DefaultReportRenderer:
         source = writer.ref("module", module_id)
         metrics = sorted({name for sample in samples for name in sample.get("metrics", {})})
         headers = ("Sample", "Parameters<br>" + (" / ".join(param_names) or "—"), "Score", "Status",
-                   "Metrics<br>" + (" / ".join(metrics) or "—"), "Runs<br>(OK / Total)", "Mean item tokens", "Mean prompt tokens", "Duration")
+                   "Metrics<br>" + (" / ".join(metrics) or "—"), "Runs<br>(OK / Total)", "Mean Tokens<br>(item / prompt)", "Duration<br>(module / LM)")
         rows = []
         for number, sample in enumerate(samples, 1):
             sid = sample["id"]
@@ -434,8 +438,8 @@ class DefaultReportRenderer:
                 sample.get("score"), sample.get("status"),
                 " / ".join(_cell(sample.get("metrics", {}).get(k)) for k in metrics) or "—",
                 _link(_count(sample.get("runs", [])), writer.href(source, writer.ref("module_runs", module_id), writer.sample_anchor(sid))),
-                _mean_output(sample.get("runs", []), "item_tokens"),
-                _mean_output(sample.get("runs", []), "prompt_tokens"), sample.get("duration")))
+                " / ".join(_cell(_mean_output(sample.get("runs", []), name)) for name in ("item_tokens", "prompt_tokens")),
+                " / ".join(_cell(value) for value in (sample.get("duration"), _lm_duration(sample.get("runs", []))))))
         return "## Samples\n\n" + (_table(headers, rows) if rows else "No samples started.")
 
     def render_module_selected_sample(self, *, selected, samples, mode, writer, module_id):
@@ -688,6 +692,10 @@ class JobReporting:
                     writer.write_run_report(mid, rid, renderer.render_run_report(run={
                         "run_id": rid, "status": status, "prediction": single.get("output_params"),
                         "error": single.get("error"), "artifacts": outputs}, writer=writer, module_id=mid))
+                    runs_ref = writer.ref("module_runs", mid)
+                    writer.write_module_runs_summary(mid, "## Runs\n\n" + _table(("Run", "Status", "Duration"),
+                        [(_link(rid, writer.href(runs_ref, writer.ref("run", mid, rid))), status, duration)]))
+                    outputs["Runs Report"] = runs_ref.path
                     outputs["Run Report"] = writer.ref("run", mid, rid).path
                 errors = [single["error"]] if single and single.get("error") else []
                 summary.append({"id": mid, "name": Path(module.playbook_name).name, "optimized": False,

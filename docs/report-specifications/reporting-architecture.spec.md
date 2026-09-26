@@ -61,7 +61,7 @@ This is a snapshot update model: repeated writes replace a fragment rather than 
 
 The report types are Job, Module, Module Runs, Sample, Run, Dataset, Dataset Item, and automatic Reproduction. Job, Module, Module Runs, Dataset, and Reproduction Reports reside in the root of the job run directory. Sample Reports reside in `samples/`, Run Reports in `runs/`, and Dataset Item Reports in `dataset-items/`. Output IPYNB files are execution artifacts linked from reports, not additional Markdown report types. Automatic notebook HTML export is removed.
 
-Job Reports link to Module Reports. Module Reports link to the applicable Run or Sample Reports and Dataset Reports. Sample Reports link to their Run Reports. Every detailed report remains identifiable when opened directly and provides navigation back to the job report.
+Job Reports link to Module Reports. Module Reports link to the applicable Run or Sample Reports and Dataset Reports. Sample Reports link to their Run Reports. Every detailed report remains identifiable when opened directly. Sample and Module Runs return to Module; individual Run returns to Module Runs; Dataset Item returns to Dataset. Each of these envelopes has exactly one top link; table links are retained.
 
 Without an optimizer, a module has one run and no synthetic sample. With `start_only`, the starting sample and its runs are reported without an optimization search report. With `optimize`, the samples, runs, dataset, and optimization process are reported. ModuleOptimizer renders a Module Optimization Progress fragment inside the Module Report; there is no separate Optimization Report file.
 

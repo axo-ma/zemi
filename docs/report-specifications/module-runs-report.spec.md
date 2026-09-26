@@ -17,3 +17,5 @@ If no runs have started, show an explicit empty state. The Job Report and Module
 Provide a stable section anchor for every started sample, including samples with no started runs. Group runs by sample in sample execution order and preserve run execution order within each group. Module Report sample-row Runs counters link to these sections, for example `<module_id>.runs.md#sample-002`. Use actual sample identities with a stable unique anchor mapping; show ordinary sample sequence numbers in visible navigation, not circled digits. Keep full sample identifiers available for identification.
 
 The Module runs summary fragment is rendered by `render_module_runs_summary` and written through `write_module_runs_summary(module_id, md_fragment)`. The Module executor supplies it. No individual run listing is embedded in Module Report.
+
+Top navigation contains exactly one link: **Back to Module Report**. A module without an optimizer also has a Runs Report for its started run, so every Run Report has a valid parent listing.
