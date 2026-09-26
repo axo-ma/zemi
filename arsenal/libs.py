@@ -121,7 +121,7 @@ class OpenAILib(_Adapter):
                tuple(sorted((config.headers or {}).items())))
         if _reuse_clients:
             client = _openai_clients.get(key)
-            if client is not None and not client.is_closed:
+            if client is not None and not client.is_closed():
                 return client
         client = module.OpenAI(base_url=self._config.openai_url, api_key=self._config.api_key,
                              timeout=self._config.timeout,
