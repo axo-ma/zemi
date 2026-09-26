@@ -1047,9 +1047,11 @@ class ZemiComponent:
             return record
 
         history = []
+        from .prompting import sample_names
+        configured_names = sample_names(optimizer.space)
 
         def save_sample(trial, report_text):
-            sample_id = f"{playbook.playbook_id}-sample-{len(history):04d}"
+            sample_id = active_sample_id
             for record in trial.runs:
                 record["sample_trial_id"] = sample_id
             report_path = self.reporting.writer.ref("sample", playbook.module_id, sample_id).path
@@ -1081,7 +1083,8 @@ class ZemiComponent:
                     raise ValueError("optimizer proposed a duplicate ParamSample")
                 started = _timestamp()
                 runs = []
-                active_sample_id = f"{playbook.playbook_id}-sample-{len(history) + 1:04d}"
+                active_sample_id = configured_names.get(sample.key(),
+                    f"{playbook.playbook_id}-sample-{len(history) + 1:04d}")
                 self.reporting.start_sample(playbook.module_id, active_sample_id)
                 report_path = self.reporting.writer.ref("sample", playbook.module_id, active_sample_id).path
                 sample_trial = resolve_sample_trial(sample_trial_prototype.config, module=playbook,

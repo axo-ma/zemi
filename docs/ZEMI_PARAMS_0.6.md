@@ -43,6 +43,10 @@ the Module contract permits adding them later without pretending they work now.
 
 ## Structural and resolution rules
 
+Paired prompt/encoder parameter values use the existing `values`/`start`
+mechanism. See [Encoding and prompt packages](ENCODING_PROMPTS.md) for the
+package layout, named Markdown templates and deterministic Sample names.
+
 An explicit component parameter TOML may be located anywhere inside the
 component root and selected with `@comp/path/to/file.toml`. Bare filenames and
 automatic selection continue to use the root `params/` directory.

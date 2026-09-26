@@ -236,7 +236,7 @@ _BUILTINS = {"dataset": {"table_detection": table_dataset, "jsonl": jsonl_datase
 
 
 def resolve_adapter(kind, name):
-    if name in _BUILTINS[kind]:
+    if name in _BUILTINS.get(kind, {}):
         return _BUILTINS[kind][name]
     if not isinstance(name, str) or not re.fullmatch(r"@comp/[^:]+\.py:[A-Za-z_][A-Za-z0-9_]*", name):
         raise ValueError(f"{kind}.adapter: unknown built-in or invalid local callable: {name!r}")

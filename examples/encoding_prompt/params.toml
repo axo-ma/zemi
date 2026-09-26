@@ -1,0 +1,17 @@
+# Copy this package to @comp/params/encoding_example and supply data/input.xlsx.
+[system]
+version = "0.6"
+[component]
+[[arsenals]]
+id = "local-models"
+config_path = "@comp/zemi/llm_curated_set_model_mode.toml"
+lifecycle = "job"
+[[modules]]
+id = "encoding-example"
+kind = "playbook"
+path = "@comp/playbook.ipynb"
+arsenal = "local-models"
+[modules.params]
+model_name = "lfm2_350m"
+encoding_prompt = { prompt_name = "cells", prompt_file = "@comp/params/encoding_example/prompts.md", encoder = "@comp/params/encoding_example/encoder.py:encode", encoding_format = "cells" }
+dataset_input = { workbook_path = "@comp/data/input.xlsx", worksheet_name = "Sheet1" }

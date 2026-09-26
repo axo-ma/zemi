@@ -26,6 +26,22 @@ def configure_review(component, entrypoint, *, settings=None, prompts=None,
     for module in modules:
         collected = {}
         collected_sources = list(sources)
+        collected_prompts = dict(prompts or {})
+        from .params import ParamSpace
+        from .prompting import validate_binding, load_prompts
+        space = ParamSpace(config=module.config['_v05_space']) if hasattr(module, 'config') else ParamSpace(config=module.params)
+        bindings = [s.values.get('encoding_prompt') for s in space.grid()]
+        prompt_sources = {}
+        for binding in bindings:
+            if binding is None:
+                continue
+            validate_binding(binding)
+            name, file = binding['prompt_name'], binding['prompt_file']
+            if name in prompt_sources and prompt_sources[name] != file:
+                raise ValueError(f'Prompt name {name} refers to different files')
+            prompt_sources[name] = file
+            collected_prompts[name] = load_prompts(file)[name]
+            collected_sources.extend([file, binding['encoder'].rsplit(':', 1)[0]])
         config_path = module.params.get('arsenal_config_path')
         if config_path:
             config = tomllib.loads(zemi_path(config_path).read_text(encoding='utf-8'))
@@ -43,7 +59,8 @@ def configure_review(component, entrypoint, *, settings=None, prompts=None,
                 collected[label] = module.params[key]
         collected.update(settings or {})
         component.reporting.configure_review(module.module_id, entrypoint=entrypoint,
-            settings=collected, prompts=prompts, sources=collected_sources, repositories=repositories)
+            settings=collected, prompts=collected_prompts,
+            sources=list(dict.fromkeys(collected_sources)), repositories=repositories)
 
 
 def _git(directory, *args):
@@ -112,7 +129,7 @@ def render_review(snapshot, *, samples, report, module_id, writer, item_count=No
             values = [(r.get('prediction') or {}).get(key) for r in sruns]
             values = [v for v in values if isinstance(v, (float, int)) and not isinstance(v, bool)]
             return sum(values) / len(values) if values else None
-        sample_id = sample.get('sample_trial_id') or sample.get('sample_id') or f'Sample {number}'
+        sample_id = sample.get('sample_trial_id') or sample.get('sample_id') or sample.get('id') or f'Sample {number}'
         label = str(sample_id)
         if sample.get('params'):
             label += ': ' + json.dumps(sample['params'], ensure_ascii=False, sort_keys=True)
