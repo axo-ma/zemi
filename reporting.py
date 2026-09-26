@@ -467,7 +467,8 @@ class DefaultReportRenderer:
 
     def render_sample_trial(self, *, sample_trial, runs, metrics, score, feedback):
         params = sample_trial.param_sample.values if sample_trial.param_sample else {}
-        parts = ["## Parameters", _table(("Parameter", "Value"), params.items())]
+        parts = ["## Parameters", _table(("Parameter", "Value"), params.items()),
+                 "## Evaluation", _table(("Score", "Metrics"), [(score, metrics)])]
         binding = params.get("encoding_prompt")
         if isinstance(binding, Mapping):
             prompt = getattr(sample_trial, "_report_prompt", None)
@@ -476,7 +477,7 @@ class DefaultReportRenderer:
                 prompt = load_prompts(binding["prompt_file"])[binding["prompt_name"]]
             from .review import _fence
             parts += ["## Prompt", _fence(prompt)]
-        parts += ["## Evaluation", _table(("Score", "Metrics"), [(score, metrics)]), "## Runs",
+        parts += ["## Runs",
                   _result_rows(runs, writer=getattr(sample_trial, "_report_writer", None),
                       module_id=getattr(sample_trial, "_report_module_id", None),
                       source=getattr(sample_trial, "_report_source", None), include_target=True)]
