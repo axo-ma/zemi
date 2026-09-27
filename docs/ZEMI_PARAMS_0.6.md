@@ -127,6 +127,10 @@ failed execution may read the partial notebook. Automatic HTML export is removed
 
 `[modules.optimizer.trial_dataset]` owns the dataset path. Its `path` field is
 required for variable Module parameters.
+Its optional `type` defaults to `TableDetectionTrialDataset`. Explicit
+`type = "@comp/zemi/dataset.py:TableDetectionTrialDataset"` selects the same
+built-in class from the loaded ZEMI package, preserving relative imports and
+class identity. Custom dataset classes must inherit that class.
 `TableDetectionTrialDataset(config=trial_dataset).load()` validates the flat
 dataset once before Arsenal starts. The SampleTrial section selects the class
 and holds only its optional `params`. Each parameter sample gets a SampleTrial

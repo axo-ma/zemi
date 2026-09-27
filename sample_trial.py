@@ -98,6 +98,12 @@ class LegacySampleTrial(SampleTrial):
 
 def _load_custom(reference: str) -> Any:
     filename, name = reference.rsplit(":", 1)
+    if filename == "@comp/zemi/dataset.py":
+        from . import dataset
+        implementation = getattr(dataset, name, None)
+        if not isinstance(implementation, type):
+            raise ValueError(f"Dataset type {reference!r} is not a class")
+        return implementation
     if filename == "@comp/zemi/sample_trial.py":
         implementation = globals().get(name)
         if not isinstance(implementation, type):
