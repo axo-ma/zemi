@@ -129,6 +129,45 @@ def _prediction_cell(run, href=None, show_error_response=False):
     return _short_value(_comparison(run), href)
 
 
+def _inline_details(label, text):
+    # Keep each Markdown table row on one physical line. Escape HTML and pipes
+    # so model output cannot create markup or additional table columns.
+    def escaped(value):
+        return html.escape(str(value), quote=True).replace("|", "&#124;").replace("\r", "&#13;").replace("\n", "&#10;")
+    return _Markdown(f"<details><summary>{escaped(label)}</summary><pre>{escaped(text)}</pre></details>")
+
+
+def _compact_prediction(value):
+    if value is None:
+        return "—"
+    if isinstance(value, (list, tuple)):
+        if not value:
+            return "[]"
+        if len(value) == 1:
+            return _compact_prediction(value[0])
+        first = _response_text(value[0])
+        return _inline_details(first + "...", _response_text(value))
+    text = _response_text(value)
+    if len(text) > 60:
+        return _inline_details(text[:60] + "...", text)
+    return text
+
+
+def _dataset_prediction_cell(run):
+    if run.get("error") or run.get("evaluation_error") or run.get("status") == "failed":
+        details = []
+        for key in ("error", "evaluation_error"):
+            if run.get(key):
+                details.append(_response_text(run[key]))
+        response = _error_response(run)
+        if response is not None:
+            details.append("Raw response: " + _response_text(response))
+        return _inline_details("Error...", "\n\n".join(details)) if details else "Error"
+    if _exact(run):
+        return "✅"
+    return _compact_prediction(_comparison(run))
+
+
 def _result_rows(runs, *, writer=None, module_id=None, source=None, include_target=False, include_sample=False):
     metrics = sorted({key for run in runs for key in run.get("metrics", {})})
     headers = (["Sample"] if include_sample else ["Item ID"]) + ["Run"]
@@ -578,12 +617,12 @@ class DefaultReportRenderer:
                 if not runs:
                     comparisons.append("—")
                 elif len(runs) == 1:
-                    comparisons.append(_prediction_cell(runs[0], href=href, show_error_response=True))
+                    comparisons.append(_dataset_prediction_cell(runs[0]))
                 else:
-                    comparisons.append(_short_value([_comparison(run) for run in runs], href))
+                    comparisons.append(_compact_prediction([_comparison(run) for run in runs]))
             rows.append((_link(item["id"], workbook_href), _link(matches, href), item.get("ground_truth"), *comparisons))
         return (f"**Job run ID:** `{writer.root.name}` · **Items:** {len(dataset.items)} · **Samples:** {len(history)}\n\n"
-            "## Items\n\nTarget shows the expected result. ✅ means evaluator-confirmed exact match; — means no prediction. Errors and truncated values link to full item results.\n\n" +
+            "## Items\n\nTarget shows the expected result. ✅ means evaluator-confirmed exact match; — means no prediction. Expand cells marked with ... to view details here.\n\n" +
             _table(("Item ID", "Matches", "Target", *sample_headers), rows))
 
     def render_worksheet_detection_report(self, *, dataset, item, history, writer, module_id):

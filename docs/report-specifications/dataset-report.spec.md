@@ -23,15 +23,25 @@ adapter publishes its ranges as comparison_prediction, without removing any
 outputs from the saved prediction.
 
 Confirmed exact matches display ✅. Missing results display `—`; empty arrays
-remain `[]`. Errors display `Error · <actual response>`. Error links to the
-Dataset Item Report. Prefer the exact `prediction.raw_response` when supplied;
-otherwise display the returned prediction value. With no response, display
-`Error · —`. The response preview is inline code, escapes table delimiters and
-handles embedded backticks. Responses over 60 characters are shortened with
-`...` linking to the full response in the Dataset Item Report. No prediction
-field name such as ranges is assumed. Stored output values remain unchanged.
-Other values over 60 rendered characters
-are shortened with a `...` link to the complete Dataset Item Report.
+remain `[]`. A single range is plain text, with no link or disclosure control.
+Multiple ranges display their first range followed by `...` in a collapsed
+HTML `<details><summary>` cell. Expanding reveals the complete prediction
+inside that cell; it never navigates to a different report. The same control
+can be closed again. Short scalar results remain plain text; other long generic
+results use a 60-character summary followed by `...` and disclose the full value.
+The renderer does not assume a field named ranges.
+
+Errors with details display `Error...` as a collapsed disclosure. Its contents
+include execution/evaluation errors and the exact `prediction.raw_response`
+when supplied, otherwise the returned prediction value. An error without
+any details displays plain `Error`. All full error responses remain in Dataset
+Item Reports too. Stored outputs remain unchanged.
+
+Disclosure HTML stays on one physical Markdown table line. Escape HTML, pipes,
+and line breaks in model responses to prevent markup injection or broken rows.
+Rendering requires a Markdown preview that supports HTML details inside tables.
+No JavaScript is required. Sample prediction cells no longer link to other reports;
+the Matches column provides the Dataset Item Report navigation.
 Target is never replaced by a checkmark. Report Sample naming is unchanged.
 
 Standalone TrialDataset rendering uses this same renderer and layout.
