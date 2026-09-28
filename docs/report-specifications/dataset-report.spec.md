@@ -5,7 +5,12 @@ Location: `<module_id>.dataset.md` in the run root.
 One row per Dataset Item, one prediction column per Sample. Columns:
 `Item ID | Matches | Target | Sample 1 (...) | Sample 2 (...) | ...`.
 
-Item ID links to `dataset-items/`; Sample headers link to Sample Reports.
+The first column, Item ID, links directly to the source Excel file specified by
+`input.workbook_path`. Resolve @comp/@inst paths and URL-encode the relative
+file link. If no workbook is supplied or the file is missing, show plain Item ID.
+The second column, Matches, links to the corresponding Dataset Item Report
+under `dataset-items/`, including when its value is `—`.
+Sample headers link to Sample Reports.
 Matches shows evaluator-confirmed exact matches / all started results when
 the evaluator provides `metrics.exact_match`; otherwise it is `—`.
 Execution or evaluation errors cannot count as matches.

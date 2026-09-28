@@ -567,6 +567,11 @@ class DefaultReportRenderer:
             matches = f"{sum(_exact(run) for run in found)} / {len(found)}" if comparable else "—"
             item_ref = writer.ref("item", module_id, item["id"])
             href = writer.href(source, item_ref)
+            workbook = (item.get("input") or {}).get("workbook_path") if isinstance(item.get("input"), Mapping) else None
+            workbook_href = None
+            if workbook:
+                from .dataset import zemi_path
+                workbook_href = writer.artifact_href(source, zemi_path(workbook))
             comparisons = []
             for trial in history:
                 runs = [run for run in trial.runs if run.get("dataset_item_id") == item["id"]]
@@ -576,7 +581,7 @@ class DefaultReportRenderer:
                     comparisons.append(_prediction_cell(runs[0], href=href, show_error_response=True))
                 else:
                     comparisons.append(_short_value([_comparison(run) for run in runs], href))
-            rows.append((_link(item["id"], href), matches, item.get("ground_truth"), *comparisons))
+            rows.append((_link(item["id"], workbook_href), _link(matches, href), item.get("ground_truth"), *comparisons))
         return (f"**Job run ID:** `{writer.root.name}` · **Items:** {len(dataset.items)} · **Samples:** {len(history)}\n\n"
             "## Items\n\nTarget shows the expected result. ✅ means evaluator-confirmed exact match; — means no prediction. Errors and truncated values link to full item results.\n\n" +
             _table(("Item ID", "Matches", "Target", *sample_headers), rows))
