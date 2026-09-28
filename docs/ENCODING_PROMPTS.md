@@ -1,8 +1,9 @@
 # Encoding and prompt packages
 
 Result tables display an `encoding_prompt` binding as its `prompt_name` only.
-This applies to Samples and Selected Sample results; Dataset sample
-columns also show the prompt name. Configuration and parameter sections retain
+This applies to Samples and Selected Sample results. Dataset sample
+column headers display only `Sample N` and link to the Sample Reports.
+Configuration and parameter sections retain
 the complete binding, and stored results and source snapshots are unchanged.
 
 A component keeps each experiment together. Its `params/` directory contains

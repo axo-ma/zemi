@@ -592,12 +592,7 @@ class DefaultReportRenderer:
         sample_headers = []
         for number, trial in enumerate(history, 1):
             sid = getattr(trial, "report_sample_id", None)
-            params = trial.sample.values if getattr(trial, "sample", None) else {}
             label = f"Sample {number}"
-            binding = params.get("encoding_prompt")
-            name = binding.get("prompt_name") if isinstance(binding, Mapping) else params.get("encoding_format")
-            if name:
-                label += f" ({name})"
             sample_headers.append(_link(label, writer.href(source, writer.ref("sample", module_id, sid))))
         rows = []
         for item in dataset.items:
