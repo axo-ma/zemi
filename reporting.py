@@ -281,6 +281,8 @@ class ReportWriter:
     def register_dataset(self, module_id):
         ref = self._register(("dataset", module_id), "", module_id, ".dataset.md")
         self._save(("dataset", module_id))
+        from .report_viewer import write_launcher
+        write_launcher(self.root / ref.path)
         return ref
 
     def register_review(self, module_id):
@@ -841,6 +843,21 @@ class JobReporting:
                     self.write_run(module_id, sample_id, run, sample_trial, refresh=False)
         fragment = dataset.render_report(history)
         self.writer.write_trial_dataset(module_id, fragment.markdown if hasattr(fragment, "markdown") else fragment)
+        rows = []
+        for item in dataset.items:
+            cells = []
+            for trial in history:
+                runs = [run for run in trial.runs if run.get('dataset_item_id') == item['id']]
+                cells.append({'sample_id': getattr(trial, 'report_sample_id', None),
+                              'contexts': runs[0].get('chat_contexts', []) if len(runs) == 1 else []})
+            rows.append({'item_id': item['id'], 'cells': cells})
+        manifest = self.writer.root / Path(self.writer.ref('dataset', module_id).path).with_suffix('.chat.json')
+        content = json.dumps({'schema_version': 1, 'rows': rows}, ensure_ascii=False, indent=2)
+        for secret in sorted(self.writer._secrets, key=len, reverse=True):
+            content = content.replace(secret, '***')
+        temporary = manifest.with_name('.' + manifest.name + '.tmp')
+        temporary.write_text(content, encoding='utf-8')
+        _replace_report(temporary, manifest)
         for item in dataset.items:
             self.writer.write_worksheet_detection_report(module_id, item["id"],
                 dataset.render_worksheet_detection_report(item, history))

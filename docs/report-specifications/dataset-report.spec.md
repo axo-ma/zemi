@@ -47,3 +47,8 @@ the Matches column provides the Dataset Item Report navigation.
 Target is never replaced by a checkmark. Report Sample naming is unchanged.
 
 Standalone TrialDataset rendering uses this same renderer and layout.
+
+An adjacent `.dataset.cmd` opens the Qt interactive viewer. The Markdown table
+remains unchanged; the viewer adds terminal-chat links from the separately saved
+`.dataset.chat.json` contexts. Disclosure triangles still expand immediately.
+See [Interactive viewer and chat](../REPORT_VIEWER.md).

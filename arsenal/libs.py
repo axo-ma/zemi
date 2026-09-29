@@ -126,6 +126,8 @@ class OpenAILib(_Adapter):
         client = module.OpenAI(base_url=self._config.openai_url, api_key=self._config.api_key,
                              timeout=self._config.timeout,
                              default_headers=self._config.headers)
+        from ..conversation import instrument_client
+        instrument_client(client, config)
         if _reuse_clients:
             _openai_clients[key] = client
         return client

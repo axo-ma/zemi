@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
+import re
+import uuid
 from copy import deepcopy
 import socket
 import subprocess
@@ -79,6 +82,7 @@ class ArsenalSession:
         self._llama_paths: dict[str, Path] = {}
         self._model_paths: dict[str, Path] = {}
         self._processes: dict[str, subprocess.Popen] = {}
+        self._server_logs: dict[str, Path] = {}
         self._running_models: dict[str, set[str]] = {}
         self._validated_external: set[tuple[str, str]] = set()
         self.llamas = NamedObjects([
@@ -109,6 +113,8 @@ class ArsenalSession:
             model for endpoint in self.endpoints._iter_raw()
             for model in endpoint.models._iter_raw()
         ], on_access=self._resolve_flat_model)
+        from ..conversation import register_arsenal
+        register_arsenal(self)
 
     @staticmethod
     def _placeholder_config(source: dict[str, Any]) -> dict[str, Any]:
@@ -131,6 +137,8 @@ class ArsenalSession:
         for model in config["models"]: model["model"] = self._resolve_value(model["model"])
         resolved = Endpoint(config, self._activate_external if config["kind"] == "external" else endpoint._on_model_access)
         self._resolved_endpoints[endpoint.name] = resolved
+        from ..conversation import register_arsenal
+        register_arsenal(self)
         return resolved
 
     def _resolve_flat_model(self, model: Model) -> Model:
@@ -543,7 +551,15 @@ class ArsenalSession:
                 "Choose another managed port or configure that server as external."
             )
 
-        process = subprocess.Popen(command)
+        log_directory = env.path.tmp / 'arsenal-logs'
+        log_directory.mkdir(parents=True, exist_ok=True)
+        log_path = log_directory / f'{llama.name}-{uuid.uuid4().hex}.log'
+        self._server_logs[llama.name] = log_path
+        # Both notebooks and terminal chats use this same managed-server path.
+        # The child keeps its inherited file handle after the parent closes it.
+        with log_path.open('wb') as log:
+            process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
         self._processes[llama.name] = process
         deadline = time.monotonic() + float(llama.startup_timeout)
         while time.monotonic() < deadline:
@@ -551,19 +567,35 @@ class ArsenalSession:
                 self._processes.pop(llama.name, None)
                 raise RuntimeError(
                     f"llama-server {llama.name!r} exited with code "
-                    f"{process.returncode}"
+                    f"{process.returncode}. Log: {log_path}\n"
+                    f"{self._server_log_tail(log_path)}"
                 )
             if self._is_server_ready(llama.host, llama.port):
                 print(f"    ✓ server ready · PID {process.pid}")
+                print(f"    Server log: {log_path}")
                 return
             time.sleep(0.5)
 
         process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=5)
         self._processes.pop(llama.name, None)
         raise TimeoutError(
             f"llama-server {llama.name!r} did not start within "
-            f"{float(llama.startup_timeout):.1f} seconds"
+            f"{float(llama.startup_timeout):.1f} seconds. Log: {log_path}\n"
+            f"{self._server_log_tail(log_path)}"
         )
+
+    @staticmethod
+    def _server_log_tail(path):
+        with Path(path).open('rb') as log:
+            log.seek(0, 2)
+            log.seek(max(0, log.tell() - 4096))
+            text = log.read().decode('utf-8', errors='replace')
+        return re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', text).strip()
 
     def _write_router_preset(
         self,

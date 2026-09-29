@@ -624,6 +624,8 @@ class Playbook(Module):
             if not isinstance(notebook, Mapping) or "cells" not in notebook:
                 notebook = self._read_output_notebook()
             entry["output_params"] = self._extract_output_params(notebook)
+            from .conversation import notebook_contexts
+            entry["chat_contexts"] = notebook_contexts(notebook)
             entry["report_output_keys"] = self._extract_report_output_keys(notebook)
             entry["timed_cells"] = self._add_cell_timings(notebook)
         except Exception as error:
@@ -637,6 +639,8 @@ class Playbook(Module):
             if self.output_path.is_file():
                 try:
                     notebook = self._read_output_notebook()
+                    from .conversation import notebook_contexts
+                    entry["chat_contexts"] = notebook_contexts(notebook)
                     if not entry.get("output_params"):
                         entry["output_params"] = self._extract_output_params(notebook)
                         entry["report_output_keys"] = self._extract_report_output_keys(notebook)
@@ -1029,6 +1033,7 @@ class ZemiComponent:
                         entry["playbook_run_id"] = record["playbook_run_id"]
                         record["artifacts"] = {"output_notebook": entry["output_notebook"]}
                         record["report_output_keys"] = entry.get("report_output_keys", [])
+                        record["chat_contexts"] = entry.get("chat_contexts", [])
                 return entry["output_params"]
 
             try:
