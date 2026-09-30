@@ -54,6 +54,17 @@ No original prediction, evaluation or report result is changed. On Windows the
 chat-owned model process is attached to a kill-on-close Job Object, so closing
 the terminal also releases that model. External servers are never terminated.
 
+`/help` lists the terminal commands. `/settings` shows every supported request
+override and its source; absent values are reported as `not set` with an unknown
+effective value instead of assuming an inference-server default. `/set` supports
+`reasoning`, `temperature`, `top_p`, `top_k`, `min_p`, `max_tokens`, `seed`,
+`repeat_penalty`, `presence_penalty`, `frequency_penalty`, `dry_multiplier` and
+`stop`. `/reasoning on|off|auto` is a shortcut. `/reset context` returns to the
+original sample prompt and answer while preserving overrides; `/reset all` also
+restores the captured request parameters. Model, context size and thread counts
+are displayed by `/settings` as read-only server parameters. No conversation
+statistics are displayed.
+
 The CMD launcher pins the generating Python and library location, with the report
 addressed relative to its neighbouring launcher. Moving/removing that interpreter
 or library requires regenerating the launcher. The viewer can also be started with

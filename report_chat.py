@@ -12,6 +12,204 @@ import time
 import uuid
 
 CHAT_CONTEXT_SIZE = 32768
+SETTING_NAMES = (
+    'reasoning', 'temperature', 'top_p', 'top_k', 'min_p', 'max_tokens',
+    'seed', 'repeat_penalty', 'presence_penalty', 'frequency_penalty',
+    'dry_multiplier', 'stop',
+)
+DIRECT_SETTINGS = {
+    'temperature', 'top_p', 'max_tokens', 'seed', 'presence_penalty',
+    'frequency_penalty', 'stop',
+}
+EXTRA_SETTINGS = {'top_k', 'min_p', 'repeat_penalty', 'dry_multiplier'}
+
+HELP_TEXT = """Chat commands
+
+/help
+    Show this help.
+/settings
+    Show every supported override and the read-only server settings.
+/set <name> <value>
+    Override a parameter for subsequent requests.
+/reasoning <on|off|auto>
+    Set reasoning for subsequent requests. 'auto' restores the server default.
+/reset context
+    Restore the original sample prompt and answer; preserve parameter overrides.
+/reset all
+    Restore the original sample prompt, answer and request parameters.
+/exit
+    Close the chat.
+
+Input: Enter sends; Alt+Enter inserts a line break; multiline paste stays one message."""
+
+
+def _number(value, name, *, integer=False, minimum=None, maximum=None):
+    try:
+        result = int(value) if integer else float(value)
+    except ValueError as error:
+        raise ValueError(f'{name} must be a {"whole number" if integer else "number"}.') from error
+    if minimum is not None and result < minimum:
+        raise ValueError(f'{name} must be at least {minimum}.')
+    if maximum is not None and result > maximum:
+        raise ValueError(f'{name} must be at most {maximum}.')
+    return result
+
+
+class ChatControls:
+    """Validated request overrides and resets for one restored conversation."""
+
+    def __init__(self, request, server=None):
+        self.request = request
+        self.original = deepcopy(request)
+        self.server = dict(server or {})
+        self.overrides = set()
+        self.server_defaults = set()
+
+    @staticmethod
+    def _extra(request):
+        extra = request.get('extra_body')
+        return extra if isinstance(extra, dict) else {}
+
+    def _explicit_value(self, name, request):
+        if name == 'reasoning':
+            kwargs = self._extra(request).get('chat_template_kwargs', {})
+            if isinstance(kwargs, dict) and isinstance(kwargs.get('enable_thinking'), bool):
+                return 'on' if kwargs['enable_thinking'] else 'off'
+            return None
+        if name in DIRECT_SETTINGS:
+            return request.get(name)
+        return self._extra(request).get(name)
+
+    def _value(self, name, request=None):
+        request = self.request if request is None else request
+        value = self._explicit_value(name, request)
+        if value is not None:
+            return value
+        if name == 'reasoning':
+            return self.server.get('reasoning')
+        return None
+
+    def settings_text(self):
+        lines = ['Request parameters', '']
+        for name in SETTING_NAMES:
+            value = self._value(name)
+            if name in self.overrides:
+                source = 'chat override'
+            elif name in self.server_defaults:
+                source = 'model configuration'
+            elif self._explicit_value(name, self.original) is not None:
+                source = 'captured request'
+            elif name == 'reasoning' and value is not None:
+                source = 'model configuration'
+            else:
+                source = 'effective value unknown'
+            rendered = 'not set' if value is None else json.dumps(value, ensure_ascii=False)
+            lines.append(f'{name:<20} {rendered:<18} source: {source}')
+        if self.server:
+            lines.extend(['', 'Server parameters (read only)', ''])
+            for name in ('model', 'context_size', 'threads', 'threads_batch'):
+                value = self.server.get(name)
+                rendered = 'unknown' if value is None else str(value)
+                lines.append(f'{name:<20} {rendered}')
+        return '\n'.join(lines)
+
+    def set(self, name, raw_value):
+        if name not in SETTING_NAMES:
+            raise ValueError(f'Unknown parameter {name!r}. Use /settings for the complete list.')
+        if name == 'reasoning':
+            value = raw_value.lower()
+            if value not in {'on', 'off', 'auto'}:
+                raise ValueError('reasoning must be on, off or auto.')
+            extra = deepcopy(self._extra(self.request))
+            kwargs = deepcopy(extra.get('chat_template_kwargs', {}))
+            if not isinstance(kwargs, dict):
+                raise ValueError('Existing chat_template_kwargs is not an object.')
+            if value == 'auto':
+                kwargs.pop('enable_thinking', None)
+            else:
+                kwargs['enable_thinking'] = value == 'on'
+            if kwargs:
+                extra['chat_template_kwargs'] = kwargs
+            else:
+                extra.pop('chat_template_kwargs', None)
+            if extra:
+                self.request['extra_body'] = extra
+            else:
+                self.request.pop('extra_body', None)
+        else:
+            parsers = {
+                'temperature': lambda v: _number(v, name, minimum=0),
+                'top_p': lambda v: _number(v, name, minimum=0, maximum=1),
+                'top_k': lambda v: _number(v, name, integer=True, minimum=0),
+                'min_p': lambda v: _number(v, name, minimum=0, maximum=1),
+                'max_tokens': lambda v: _number(v, name, integer=True, minimum=1),
+                'seed': lambda v: _number(v, name, integer=True, minimum=-1),
+                'repeat_penalty': lambda v: _number(v, name, minimum=0),
+                'presence_penalty': lambda v: _number(v, name, minimum=-2, maximum=2),
+                'frequency_penalty': lambda v: _number(v, name, minimum=-2, maximum=2),
+                'dry_multiplier': lambda v: _number(v, name, minimum=0),
+                'stop': self._parse_stop,
+            }
+            value = parsers[name](raw_value)
+            if name in DIRECT_SETTINGS:
+                self.request[name] = value
+            else:
+                extra = deepcopy(self._extra(self.request))
+                extra[name] = value
+                self.request['extra_body'] = extra
+        if name == 'reasoning' and value == 'auto':
+            self.overrides.discard(name)
+            self.server_defaults.add(name)
+        else:
+            self.overrides.add(name)
+            self.server_defaults.discard(name)
+        return f'{name} = {json.dumps(self._value(name), ensure_ascii=False)}; applied to subsequent requests.'
+
+    @staticmethod
+    def _parse_stop(value):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError as error:
+            raise ValueError('stop must be a JSON string or an array of strings.') from error
+        if isinstance(parsed, str):
+            return parsed
+        if isinstance(parsed, list) and all(isinstance(item, str) for item in parsed):
+            return parsed
+        raise ValueError('stop must be a JSON string or an array of strings.')
+
+    def reset_context(self):
+        self.request['messages'] = deepcopy(self.original['messages'])
+        return 'Conversation restored to the original sample. Parameter overrides preserved.'
+
+    def reset_all(self):
+        self.request.clear()
+        self.request.update(deepcopy(self.original))
+        self.overrides.clear()
+        self.server_defaults.clear()
+        return 'Conversation and parameters restored to the original sample.'
+
+    def command(self, text):
+        stripped = text.strip()
+        if stripped == '/help':
+            return HELP_TEXT
+        if stripped == '/settings':
+            return self.settings_text()
+        if stripped.startswith('/reasoning '):
+            return self.set('reasoning', stripped.split(maxsplit=1)[1])
+        if stripped.startswith('/set '):
+            parts = stripped.split(maxsplit=2)
+            if len(parts) != 3:
+                raise ValueError('Usage: /set <parameter> <value>')
+            return self.set(parts[1], parts[2])
+        if stripped == '/reset context':
+            return self.reset_context()
+        if stripped == '/reset all':
+            return self.reset_all()
+        if stripped == '/reset' or stripped.startswith('/reset '):
+            raise ValueError('Usage: /reset context | /reset all')
+        if stripped.startswith('/'):
+            raise ValueError('Unknown command. Use /help.')
+        return None
 
 
 def create_input_session(*, input=None, output=None):
@@ -175,8 +373,15 @@ def main(argv=None):
                       api_key=endpoint.config.get('api_key', 'llama.cpp'),
                       timeout=endpoint.config['request_timeout'],
                       headers=endpoint.config.get('headers'), exact_base_url=kind == 'external').openai.client
+        controls = ChatControls(request, {
+            'model': model_name,
+            'context_size': model.config.get('context_window'),
+            'threads': model.config.get('threads'),
+            'threads_batch': model.config.get('threads_batch'),
+            'reasoning': model.config.get('reasoning'),
+        })
         print(f'Context: {model.config.get("context_window", "provider limit")} tokens. '
-              'Paste a multiline request directly; Enter sends; Alt+Enter adds a line; /exit closes.')
+              'Paste a multiline request directly; Enter sends; Alt+Enter adds a line; /help lists commands.')
         input_session = create_input_session()
         transcript = args.manifest.resolve().parent / 'chats' / (uuid.uuid4().hex + '.json')
         transcript.parent.mkdir(parents=True, exist_ok=True)
@@ -189,6 +394,12 @@ def main(argv=None):
             if message.strip() == '/exit':
                 break
             if not message.strip():
+                continue
+            if message.lstrip().startswith('/'):
+                try:
+                    print(controls.command(message))
+                except ValueError as error:
+                    print(f'Command failed: {error}')
                 continue
             try:
                 print('Обработка запроса…')
