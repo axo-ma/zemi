@@ -12,6 +12,9 @@ Dataset Reports, Item Reports and run tables/details. Numbers are local to the
 module dataset; the original Item ID remains the identity. Changing dataset order
 changes these display numbers. The narrow first `#` column links to the Item Report.
 Its viewer width is 38 pixels. Workbook links remain in Item ID.
+The dataset table uses its content width instead of stretching to fill the window.
+Target, Matches and Sample columns stay adjacent, including during partial runs
+with only a few samples. Additional samples use horizontal scrolling.
 
 Dataset Report keeps #, Item ID and Target fixed at the left while Matches and all
 Sample columns scroll horizontally. Other report tables keep their first column

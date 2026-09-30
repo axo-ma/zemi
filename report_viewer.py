@@ -22,6 +22,7 @@ body{margin:20px;background:#111314;color:#c6c9cc;font:14px/1.45 "Segoe UI",sans
 h1{font-size:23px;color:#eee}h2{font-size:18px}a{color:#40b1d5;text-decoration:none}a:hover,a:focus-visible{text-decoration:underline;text-underline-offset:3px}
 .table-wrap{overflow:auto;max-height:72vh;border:1px solid #303538}
 table{border-collapse:separate;border-spacing:0;font-size:13px;min-width:100%;width:max-content}
+table.dataset-items{min-width:0;width:max-content}
 th,td{border-bottom:1px solid #393d40;padding:7px 10px;text-align:left;vertical-align:top;white-space:nowrap}
 th{background:#191c1e;position:sticky;top:0;z-index:3;font-weight:600}
 table:not(.dataset-items) td:first-child{position:sticky;left:0;background:#111314;z-index:2;min-width:290px;box-shadow:2px 0 0 #393d40}
