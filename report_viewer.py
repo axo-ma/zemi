@@ -29,6 +29,10 @@ table:not(.dataset-items) th:first-child{left:0;z-index:4;min-width:290px;box-sh
 .dataset-items .sticky-item{position:sticky;left:0;box-sizing:border-box;width:290px;min-width:290px;max-width:290px;background:#111314;z-index:2;overflow:hidden;text-overflow:ellipsis}
 .dataset-items .sticky-target{position:sticky;left:290px;box-sizing:border-box;max-width:260px;background:#111314;z-index:2;overflow:hidden;text-overflow:ellipsis;box-shadow:2px 0 0 #393d40}
 .dataset-items th.sticky-item,.dataset-items th.sticky-target{background:#191c1e;z-index:4}
+.dataset-items .sticky-number{position:sticky;left:0;box-sizing:border-box;width:38px;min-width:38px;max-width:38px;padding:6px 4px;text-align:center;background:#111314;z-index:2}
+.dataset-items th.sticky-number{background:#191c1e;z-index:4}
+.dataset-items.numbered .sticky-item{left:38px}
+.dataset-items.numbered .sticky-target{left:328px}
 tbody tr:hover,tbody tr:hover td:first-child,tbody tr:hover td.sticky-target{background:#1b2023}
 summary{cursor:pointer}pre{white-space:pre-wrap;overflow-wrap:anywhere;max-width:450px;background:#202529;padding:10px;border-radius:4px;font:12px/1.5 Consolas,monospace}
 details[open]{min-width:180px;max-width:450px}code{font-family:Consolas,monospace}
@@ -58,21 +62,29 @@ def render_markdown(path):
         table = next((t for t in soup.find_all('table')
                       if (lambda names: names and names[0] == 'Item ID' and
                           set(names[1:3]) == {'Matches', 'Target'})(
-                              [h.get_text() for h in t.select('thead th')])), None)
+                              [h.get_text() for h in t.select('thead th') if h.get_text() != '#'])), None)
         if table:
             headers = table.select('thead th')
-            if headers[1].get_text() == 'Matches':
-                headers[1].insert_before(headers[2].extract())
+            offset = int(headers[0].get_text() == '#')
+            if headers[1 + offset].get_text() == 'Matches':
+                headers[1 + offset].insert_before(headers[2 + offset].extract())
                 for row in table.select('tbody > tr'):
                     cells = row.find_all('td', recursive=False)
-                    if len(cells) >= 3:
-                        cells[1].insert_before(cells[2].extract())
+                    if len(cells) >= 3 + offset:
+                        cells[1 + offset].insert_before(cells[2 + offset].extract())
             table['class'] = [*table.get('class', []), 'dataset-items']
             headers = table.select('thead th')
+            if offset:
+                table['class'].append('numbered')
+                headers[0]['class'] = ['sticky-number']
+                for row in table.select('tbody > tr'):
+                    row.find_all('td', recursive=False)[0]['class'] = ['sticky-number']
+            headers = headers[offset:]
             headers[0]['class'] = [*headers[0].get('class', []), 'sticky-item']
             headers[1]['class'] = [*headers[1].get('class', []), 'sticky-target']
             for row_index, row in enumerate(table.select('tbody > tr')):
                 tds = row.find_all('td', recursive=False)
+                tds = tds[offset:]
                 if len(tds) >= 2:
                     tds[0]['class'] = [*tds[0].get('class', []), 'sticky-item']
                     tds[1]['class'] = [*tds[1].get('class', []), 'sticky-target']
@@ -82,6 +94,7 @@ def render_markdown(path):
                 data = json.loads(manifest.read_text(encoding='utf-8'))
                 for row_index, row in enumerate(table.select('tbody > tr')):
                     tds = row.find_all('td', recursive=False)
+                    tds = tds[offset:]
                     if row_index >= len(data['rows']) or not tds or tds[0].get_text() != data['rows'][row_index]['item_id']:
                         continue
                     for column, td in enumerate(tds[3:]):

@@ -170,7 +170,7 @@ def _dataset_prediction_cell(run):
 
 def _result_rows(runs, *, writer=None, module_id=None, source=None, include_target=False, include_sample=False):
     metrics = sorted({key for run in runs for key in run.get("metrics", {})})
-    headers = (["Sample"] if include_sample else ["Item ID"]) + ["Run"]
+    headers = (["Sample"] if include_sample else ["#", "Item ID"]) + ["Run"]
     if include_target:
         headers.append("Target")
     headers += ["Prediction", "Metrics<br>" + (" / ".join(metrics) or "—"), "Error"]
@@ -187,6 +187,8 @@ def _result_rows(runs, *, writer=None, module_id=None, source=None, include_targ
         else:
             first = _link(item_id, item_href)
         row = [first, _link(rid, run_href)]
+        if not include_sample:
+            row.insert(0, writer.item_number(module_id, item_id) if writer else None)
         if include_target:
             row.append((run.get("item") or {}).get("ground_truth"))
         row += [_prediction_cell(run, href=None if include_sample else run_href),
@@ -295,6 +297,11 @@ class ReportWriter:
         ref = self._register(key, "dataset-items/", f"{module_id}.{item_id}")
         self._save(key)
         return ref
+
+    def item_number(self, module_id, item_id):
+        """One-based position in the registered dataset, shared by all reports."""
+        ids = [key[2] for key in self._refs if key[0] == "item" and key[1] == module_id]
+        return ids.index(item_id) + 1 if item_id in ids else None
 
     def register_sample(self, module_id, sample_id):
         key = ("sample", module_id, sample_id)
@@ -551,6 +558,9 @@ class DefaultReportRenderer:
 
     def render_run_report(self, *, run, writer=None, module_id=None, sample_id=None):
         lines = [f"**Status:** {_cell(run.get('status'))}", f"**Dataset item:** {_cell(run.get('dataset_item_id'))}"]
+        number = writer.item_number(module_id, run.get('dataset_item_id')) if writer else None
+        if number is not None:
+            lines.insert(1, f"**Item #:** {number}")
         if run.get("error") or run.get("evaluation_error"):
             lines.append("## Errors\n\n" + _cell(run.get("error") or run.get("evaluation_error")))
         if run.get("prediction") is not None:
@@ -580,12 +590,12 @@ class DefaultReportRenderer:
             parameters = " / ".join(f"{name} = {_cell(value)}" for name, value in params.items()) or "—"
             parts.append(f"### {sample_link}\n\nSample ID: `{sid}`\n\n**Parameters:** {parameters}")
             rows = [(_link(run["run_id"], writer.href(source, writer.ref("run", module_id, run["run_id"]))),
-                     run.get("status"),
+                     writer.item_number(module_id, run.get("dataset_item_id")), run.get("status"),
                      " / ".join(_cell((run.get("prediction") or {}).get(name))
                                 if name in run.get("report_output_keys", []) else "—"
                                 for name in output_names) or "—",
                      run.get("duration")) for run in sample.get("runs", [])]
-            parts.append(_table(("Run", "Status", output_header, "Duration"), rows) if rows else "No runs started.")
+            parts.append(_table(("Run", "Item #", "Status", output_header, "Duration"), rows) if rows else "No runs started.")
         if not samples: parts.append("No runs started.")
         return "\n\n".join(parts)
 
@@ -597,7 +607,7 @@ class DefaultReportRenderer:
             label = f"Sample {number}"
             sample_headers.append(_link(label, writer.href(source, writer.ref("sample", module_id, sid))))
         rows = []
-        for item in dataset.items:
+        for number, item in enumerate(dataset.items, 1):
             found = [run for trial in history for run in trial.runs if run.get("dataset_item_id") == item["id"]]
             comparable = any("exact_match" in run.get("metrics", {}) for run in found)
             matches = f"{sum(_exact(run) for run in found)} / {len(found)}" if comparable else "—"
@@ -617,10 +627,10 @@ class DefaultReportRenderer:
                     comparisons.append(_dataset_prediction_cell(runs[0]))
                 else:
                     comparisons.append(_compact_prediction([_comparison(run) for run in runs]))
-            rows.append((_link(item["id"], workbook_href), item.get("ground_truth"), _link(matches, href), *comparisons))
+            rows.append((_link(number, href), _link(item["id"], workbook_href), item.get("ground_truth"), _link(matches, href), *comparisons))
         return (f"**Job run ID:** `{writer.root.name}` · **Items:** {len(dataset.items)} · **Samples:** {len(history)}\n\n"
             "## Items\n\nTarget shows the expected result. ✅ means evaluator-confirmed exact match; — means no prediction. Expand cells marked with ... to view details here.\n\n" +
-            _table(("Item ID", "Target", "Matches", *sample_headers), rows))
+            _table(("#", "Item ID", "Target", "Matches", *sample_headers), rows))
 
     def render_worksheet_detection_report(self, *, dataset, item, history, writer, module_id):
         source = writer.ref("item", module_id, item["id"])
@@ -641,7 +651,8 @@ class DefaultReportRenderer:
             if (run.get("error") or run.get("evaluation_error")) and response is not None:
                 responses += [f"### {run.get('run_id')}", _fence(_response_text(response))]
         raw_section = "\n\n## Raw responses for errors\n\n" + "\n\n".join(responses) if responses else ""
-        return (f"**Item ID:** `{item['id']}` · **Job run ID:** `{writer.root.name}`\n\n"
+        number = next(i for i, entry in enumerate(dataset.items, 1) if entry['id'] == item['id'])
+        return (f"**Item #:** {number} · **Item ID:** `{item['id']}` · **Job run ID:** `{writer.root.name}`\n\n"
                 "## Input\n\n" + _table(("Parameter", "Value"), item.get("input", {}).items()) +
                 "\n\n## Target\n\n" + _cell(item.get("ground_truth")) +
                 "\n\n## Results\n\n" + _result_rows(found, writer=writer, module_id=module_id,

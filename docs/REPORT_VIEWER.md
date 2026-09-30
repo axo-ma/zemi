@@ -7,7 +7,13 @@ disclosures preserved. The viewer requires PyQt5, PyQtWebEngine,
 markdown-it-py and beautifulsoup4 in the interpreter generating the reports.
 There is no HTTP viewer server, Windows protocol registration or file association.
 
-Dataset Report keeps Item ID and Target fixed at the left while Matches and all
+Dataset items have a one-based number in dataset order, shared across samples,
+Dataset Reports, Item Reports and run tables/details. Numbers are local to the
+module dataset; the original Item ID remains the identity. Changing dataset order
+changes these display numbers. The narrow first `#` column links to the Item Report.
+Its viewer width is 38 pixels. Workbook links remain in Item ID.
+
+Dataset Report keeps #, Item ID and Target fixed at the left while Matches and all
 Sample columns scroll horizontally. Other report tables keep their first column
 fixed. Upper table headers remain fixed during vertical scrolling.
 Existing Markdown files and checkmarks are unchanged. The viewer overlays chat
