@@ -7,7 +7,9 @@ disclosures preserved. The viewer requires PyQt5, PyQtWebEngine,
 markdown-it-py and beautifulsoup4 in the interpreter generating the reports.
 There is no HTTP viewer server, Windows protocol registration or file association.
 
-The first column and upper table headers remain fixed within table scrolling.
+Dataset Report keeps Item ID and Target fixed at the left while Matches and all
+Sample columns scroll horizontally. Other report tables keep their first column
+fixed. Upper table headers remain fixed during vertical scrolling.
 Existing Markdown files and checkmarks are unchanged. The viewer overlays chat
 links on the existing prediction text or ✅. Links are blue and underlined on
 hover; errors are red. The disclosure triangle expands immediately; clicking
@@ -15,6 +17,8 @@ its answer text opens the terminal instead. Missing/ambiguous contexts have no
 chat link. Sample headings open Sample Reports; Matches opens Item Reports;
 Markdown links render in the same window, and workbook links open through the
 Windows default application. Back, Forward and Refresh support navigation.
+The viewer uses the Dataset Report document-and-grid icon in the report palette
+for its title bar, Alt+Tab and the Windows taskbar, with a dedicated Windows app ID.
 
 ## Captured context
 

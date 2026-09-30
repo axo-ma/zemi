@@ -617,10 +617,10 @@ class DefaultReportRenderer:
                     comparisons.append(_dataset_prediction_cell(runs[0]))
                 else:
                     comparisons.append(_compact_prediction([_comparison(run) for run in runs]))
-            rows.append((_link(item["id"], workbook_href), _link(matches, href), item.get("ground_truth"), *comparisons))
+            rows.append((_link(item["id"], workbook_href), item.get("ground_truth"), _link(matches, href), *comparisons))
         return (f"**Job run ID:** `{writer.root.name}` · **Items:** {len(dataset.items)} · **Samples:** {len(history)}\n\n"
             "## Items\n\nTarget shows the expected result. ✅ means evaluator-confirmed exact match; — means no prediction. Expand cells marked with ... to view details here.\n\n" +
-            _table(("Item ID", "Matches", "Target", *sample_headers), rows))
+            _table(("Item ID", "Target", "Matches", *sample_headers), rows))
 
     def render_worksheet_detection_report(self, *, dataset, item, history, writer, module_id):
         source = writer.ref("item", module_id, item["id"])

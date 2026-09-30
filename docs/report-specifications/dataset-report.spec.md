@@ -3,12 +3,12 @@
 Location: `<module_id>.dataset.md` in the run root.
 
 One row per Dataset Item, one prediction column per Sample. Columns:
-`Item ID | Matches | Target | Sample 1 | Sample 2 | ...`.
+`Item ID | Target | Matches | Sample 1 | Sample 2 | ...`.
 
 The first column, Item ID, links directly to the source Excel file specified by
 `input.workbook_path`. Resolve @comp/@inst paths and URL-encode the relative
 file link. If no workbook is supplied or the file is missing, show plain Item ID.
-The second column, Matches, links to the corresponding Dataset Item Report
+The third column, Matches, links to the corresponding Dataset Item Report
 under `dataset-items/`, including when its value is `—`.
 Sample headers link to Sample Reports and display only `Sample N`, in execution
 order. Do not append prompt names, encoding formats, or other sample parameters.
@@ -51,4 +51,6 @@ Standalone TrialDataset rendering uses this same renderer and layout.
 An adjacent `.dataset.cmd` opens the Qt interactive viewer. The Markdown table
 remains unchanged; the viewer adds terminal-chat links from the separately saved
 `.dataset.chat.json` contexts. Disclosure triangles still expand immediately.
+The viewer keeps Item ID and Target fixed at the left; Matches and Sample columns
+scroll horizontally. Its window and Windows taskbar use the Dataset Report icon.
 See [Interactive viewer and chat](../REPORT_VIEWER.md).

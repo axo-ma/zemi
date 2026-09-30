@@ -14,6 +14,9 @@ if __package__ in {None, ''}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     __package__ = 'zemi'
 
+ICON_PATH = Path(__file__).resolve().parent / 'assets' / 'dataset-report.ico'
+WINDOWS_APP_ID = 'ZEMI.DatasetReport'
+
 CSS = '''
 body{margin:20px;background:#111314;color:#c6c9cc;font:14px/1.45 "Segoe UI",sans-serif}
 h1{font-size:23px;color:#eee}h2{font-size:18px}a{color:#40b1d5;text-decoration:none}a:hover,a:focus-visible{text-decoration:underline;text-underline-offset:3px}
@@ -21,9 +24,12 @@ h1{font-size:23px;color:#eee}h2{font-size:18px}a{color:#40b1d5;text-decoration:n
 table{border-collapse:separate;border-spacing:0;font-size:13px;min-width:100%;width:max-content}
 th,td{border-bottom:1px solid #393d40;padding:7px 10px;text-align:left;vertical-align:top;white-space:nowrap}
 th{background:#191c1e;position:sticky;top:0;z-index:3;font-weight:600}
-td:first-child{position:sticky;left:0;background:#111314;z-index:2;min-width:290px;box-shadow:2px 0 0 #393d40}
-th:first-child{left:0;z-index:4;min-width:290px;box-shadow:2px 0 0 #393d40}
-tbody tr:hover,tbody tr:hover td:first-child{background:#1b2023}
+table:not(.dataset-items) td:first-child{position:sticky;left:0;background:#111314;z-index:2;min-width:290px;box-shadow:2px 0 0 #393d40}
+table:not(.dataset-items) th:first-child{left:0;z-index:4;min-width:290px;box-shadow:2px 0 0 #393d40}
+.dataset-items .sticky-item{position:sticky;left:0;box-sizing:border-box;width:290px;min-width:290px;max-width:290px;background:#111314;z-index:2;overflow:hidden;text-overflow:ellipsis}
+.dataset-items .sticky-target{position:sticky;left:290px;box-sizing:border-box;max-width:260px;background:#111314;z-index:2;overflow:hidden;text-overflow:ellipsis;box-shadow:2px 0 0 #393d40}
+.dataset-items th.sticky-item,.dataset-items th.sticky-target{background:#191c1e;z-index:4}
+tbody tr:hover,tbody tr:hover td:first-child,tbody tr:hover td.sticky-target{background:#1b2023}
 summary{cursor:pointer}pre{white-space:pre-wrap;overflow-wrap:anywhere;max-width:450px;background:#202529;padding:10px;border-radius:4px;font:12px/1.5 Consolas,monospace}
 details[open]{min-width:180px;max-width:450px}code{font-family:Consolas,monospace}
 .run-error{color:#ef8181}.run-link{white-space:nowrap}
@@ -48,30 +54,51 @@ def render_markdown(path):
             if attr in tag.attrs and str(tag[attr]).strip().lower().startswith(('javascript:', 'data:', 'vbscript:')):
                 del tag[attr]
     manifest = path.with_suffix('.chat.json')
-    if path.name.endswith('.dataset.md') and manifest.is_file():
-        data = json.loads(manifest.read_text(encoding='utf-8'))
+    if path.name.endswith('.dataset.md'):
         table = next((t for t in soup.find_all('table')
-                      if [h.get_text() for h in t.select('thead th')][:3] == ['Item ID', 'Matches', 'Target']), None)
+                      if (lambda names: names and names[0] == 'Item ID' and
+                          set(names[1:3]) == {'Matches', 'Target'})(
+                              [h.get_text() for h in t.select('thead th')])), None)
         if table:
+            headers = table.select('thead th')
+            if headers[1].get_text() == 'Matches':
+                headers[1].insert_before(headers[2].extract())
+                for row in table.select('tbody > tr'):
+                    cells = row.find_all('td', recursive=False)
+                    if len(cells) >= 3:
+                        cells[1].insert_before(cells[2].extract())
+            table['class'] = [*table.get('class', []), 'dataset-items']
+            headers = table.select('thead th')
+            headers[0]['class'] = [*headers[0].get('class', []), 'sticky-item']
+            headers[1]['class'] = [*headers[1].get('class', []), 'sticky-target']
             for row_index, row in enumerate(table.select('tbody > tr')):
                 tds = row.find_all('td', recursive=False)
-                if row_index >= len(data['rows']) or not tds or tds[0].get_text() != data['rows'][row_index]['item_id']:
-                    continue
-                for column, td in enumerate(tds[3:]):
-                    try:
-                        cell = data['rows'][row_index]['cells'][column]
-                    except IndexError:
+                if len(tds) >= 2:
+                    tds[0]['class'] = [*tds[0].get('class', []), 'sticky-item']
+                    tds[1]['class'] = [*tds[1].get('class', []), 'sticky-target']
+                    tds[0]['title'] = tds[0].get_text()
+                    tds[1]['title'] = tds[1].get_text()
+            if manifest.is_file():
+                data = json.loads(manifest.read_text(encoding='utf-8'))
+                for row_index, row in enumerate(table.select('tbody > tr')):
+                    tds = row.find_all('td', recursive=False)
+                    if row_index >= len(data['rows']) or not tds or tds[0].get_text() != data['rows'][row_index]['item_id']:
                         continue
-                    contexts = cell.get('contexts', [])
-                    if len(contexts) != 1 or not contexts[0].get('source') or contexts[0].get('unsupported_fields'):
-                        continue
-                    target = td.find('summary') or td
-                    anchor = soup.new_tag('a', href=f'zemi-chat:{row_index}:{column}')
-                    anchor['class'] = 'run-link' + (' run-error' if target.get_text().startswith('Error') else '')
-                    anchor['title'] = 'Продолжить в терминале'
-                    for child in list(target.contents):
-                        anchor.append(child.extract())
-                    target.append(anchor)
+                    for column, td in enumerate(tds[3:]):
+                        try:
+                            cell = data['rows'][row_index]['cells'][column]
+                        except IndexError:
+                            continue
+                        contexts = cell.get('contexts', [])
+                        if len(contexts) != 1 or not contexts[0].get('source') or contexts[0].get('unsupported_fields'):
+                            continue
+                        target = td.find('summary') or td
+                        anchor = soup.new_tag('a', href=f'zemi-chat:{row_index}:{column}')
+                        anchor['class'] = 'run-link' + (' run-error' if target.get_text().startswith('Error') else '')
+                        anchor['title'] = 'Продолжить в терминале'
+                        for child in list(target.contents):
+                            anchor.append(child.extract())
+                        target.append(anchor)
     for table in soup.find_all('table'):
         wrapper = soup.new_tag('div', attrs={'class': 'table-wrap'})
         table.wrap(wrapper)
@@ -129,11 +156,17 @@ def main(argv=None):
             break
     from PyQt5.QtCore import QUrl, QObject, pyqtSlot, QTimer
     from PyQt5.QtWebChannel import QWebChannel
-    from PyQt5.QtGui import QDesktopServices
+    if os.name == 'nt':
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(WINDOWS_APP_ID)
+    from PyQt5.QtGui import QDesktopServices, QIcon
     from PyQt5.QtWidgets import QApplication, QMainWindow, QToolBar, QMessageBox
     from PyQt5.QtWebEngineWidgets import QWebEngineView, QWebEnginePage, QWebEngineSettings
     app = QApplication([sys.argv[0]])
+    icon = QIcon(str(ICON_PATH))
+    app.setWindowIcon(icon)
     window = QMainWindow()
+    window.setWindowIcon(icon)
     view = QWebEngineView()
     history, position = [], -1
     current = args.report.resolve()
