@@ -14,6 +14,24 @@ import uuid
 CHAT_CONTEXT_SIZE = 32768
 
 
+def create_input_session(*, input=None, output=None):
+    """Keep a pasted block in one message while Enter submits typed text."""
+    from prompt_toolkit import PromptSession
+    from prompt_toolkit.key_binding import KeyBindings
+
+    bindings = KeyBindings()
+
+    @bindings.add('enter')
+    def submit(event):
+        event.current_buffer.validate_and_handle()
+
+    @bindings.add('escape', 'enter')
+    def newline(event):
+        event.current_buffer.insert_text('\n')
+
+    return PromptSession(multiline=True, key_bindings=bindings, input=input, output=output)
+
+
 def load_context(manifest, row, column):
     data = json.loads(Path(manifest).read_text(encoding='utf-8'))
     cell = data['rows'][row]['cells'][column]
@@ -157,23 +175,19 @@ def main(argv=None):
                       api_key=endpoint.config.get('api_key', 'llama.cpp'),
                       timeout=endpoint.config['request_timeout'],
                       headers=endpoint.config.get('headers'), exact_base_url=kind == 'external').openai.client
-        print(f'Context: {model.config.get("context_window", "provider limit")} tokens. /exit to close; /multi for multiline input.')
+        print(f'Context: {model.config.get("context_window", "provider limit")} tokens. '
+              'Paste a multiline request directly; Enter sends; Alt+Enter adds a line; /exit closes.')
+        input_session = create_input_session()
         transcript = args.manifest.resolve().parent / 'chats' / (uuid.uuid4().hex + '.json')
         transcript.parent.mkdir(parents=True, exist_ok=True)
         print('Conversation saved separately:', transcript)
         while True:
             try:
-                message = input('\nВы > ')
+                message = input_session.prompt('\nВы > ')
             except EOFError:
                 break
             if message.strip() == '/exit':
                 break
-            if message.strip() == '/multi':
-                print('Enter lines; a single /send submits them.')
-                lines = []
-                while (line := input()) != '/send':
-                    lines.append(line)
-                message = '\n'.join(lines)
             if not message.strip():
                 continue
             try:

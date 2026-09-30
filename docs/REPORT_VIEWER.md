@@ -45,8 +45,10 @@ is substituted silently. External endpoints retain their provider context limit;
 the client cannot enlarge a remote model's context.
 
 The terminal appends user/assistant messages after the captured original answer.
-Failed requests leave the preceding conversation intact. `/multi` accepts multiline
-input terminated by `/send`; `/exit`, EOF or Ctrl+C closes the chat. Conversations
+Failed requests leave the preceding conversation intact. Paste a multiline request
+directly: the pasted block stays in one message. Enter submits the message;
+Alt+Enter inserts a line break while typing. `/exit`, EOF or Ctrl+C closes the chat.
+Terminal input uses prompt_toolkit from the project interpreter. Conversations
 are stored separately under the run's `chats/` directory after successful turns.
 No original prediction, evaluation or report result is changed. On Windows the
 chat-owned model process is attached to a kill-on-close Job Object, so closing
