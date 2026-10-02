@@ -54,14 +54,14 @@ table.dataset-items{min-width:0;width:max-content}
 th,td{border-bottom:1px solid #393d40;padding:7px 10px;text-align:left;vertical-align:top;white-space:nowrap}
 th{background:#191c1e;position:sticky;top:0;z-index:3;font-weight:600}
 .module-samples .sample-number{box-sizing:border-box;width:38px;min-width:38px;padding:7px 4px;text-align:center}
-.dataset-items .target-value,.dataset-items .item-value{display:inline-block;max-width:180px;overflow:hidden;text-overflow:ellipsis;vertical-align:top}
-.dataset-items .sticky-item{position:sticky;left:0;box-sizing:border-box;width:200px;min-width:200px;max-width:200px;background:#111314;z-index:2}
-.dataset-items .sticky-target{position:sticky;left:var(--item-width,200px);box-sizing:border-box;width:200px;min-width:200px;max-width:200px;background:#111314;z-index:2;overflow:hidden;text-overflow:ellipsis;box-shadow:2px 0 0 #393d40}
+.dataset-items .target-value,.dataset-items .item-value{display:inline-block;max-width:130px;overflow:hidden;text-overflow:ellipsis;vertical-align:top}
+.dataset-items .sticky-item{position:sticky;left:0;box-sizing:border-box;width:150px;min-width:150px;max-width:150px;background:#111314;z-index:2}
+.dataset-items .sticky-target{position:sticky;left:var(--item-width,150px);box-sizing:border-box;width:150px;min-width:150px;max-width:150px;background:#111314;z-index:2;overflow:hidden;text-overflow:ellipsis;box-shadow:2px 0 0 #393d40}
 .dataset-items th.sticky-item,.dataset-items th.sticky-target{background:#191c1e;z-index:4}
 .dataset-items .sticky-number{position:sticky;left:0;box-sizing:border-box;width:38px;min-width:38px;max-width:38px;padding:6px 4px;text-align:center;background:#111314;z-index:2}
 .dataset-items th.sticky-number{background:#191c1e;z-index:4}
 .dataset-items.numbered .sticky-item{left:38px}
-.dataset-items.numbered .sticky-target{left:calc(38px + var(--item-width,200px))}
+.dataset-items.numbered .sticky-target{left:calc(38px + var(--item-width,150px))}
 tbody tr:hover,tbody tr:hover td:first-child,tbody tr:hover td.sticky-target{background:#1b2023}
 summary{cursor:pointer}pre{white-space:pre-wrap;overflow-wrap:anywhere;max-width:450px;background:#202529;padding:10px;border-radius:4px;font:12px/1.5 Consolas,monospace}
 details[open]{min-width:180px;max-width:450px}code{font-family:Consolas,monospace}

@@ -49,8 +49,8 @@ sticky columns and native disclosures.
 - Order: #, Item ID, Target, Matches, Sample 1, Sample 2, ... .
 - # is 38 px and links to the Item Report. Item ID links to the source workbook.
 - #, Item ID and Target remain visible during horizontal scrolling.
-- Item ID and Target are each fixed at 200 px including padding, approximately
-  the width of three short Excel ranges. Their inner spans are capped at 180 px.
+- Item ID and Target are each fixed at 150 px including padding.
+  Their inner spans are capped at 130 px.
   Overflow uses an ellipsis; the complete ID and target are available through
   title on hover. Do not grow these columns to fit long identifiers or targets.
   Target's sticky offset follows the actual Item ID column width.
