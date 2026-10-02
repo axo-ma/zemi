@@ -1111,6 +1111,8 @@ class ZemiComponent:
                             raise ValueError(f"SampleTrial metric {name!r} must be a finite number")
                         normalized[str(name)] = float(value)
                     json.dumps(feedback, ensure_ascii=False, allow_nan=False)
+                    from .execution import retain_sample_notebooks
+                    retain_sample_notebooks(runs, self.report.data['trials'], self.run_directory)
                     report_text = sample_trial.render_report(runs, normalized, float(score), feedback)
                     artifacts = {str(run.get("playbook_run_id", index)): run["artifacts"]
                                  for index, run in enumerate(runs) if isinstance(run, Mapping) and run.get("artifacts")}

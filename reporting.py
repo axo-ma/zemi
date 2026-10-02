@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote
 from collections.abc import Mapping, Sequence
+from contextlib import contextmanager
 
 
 class _Markdown(str):
@@ -219,8 +220,8 @@ class ReportWriter:
     """One writer for a job; atomic, ordered, replacing fragment writes."""
 
     _single = ("module_parameters", "module_results", "module_artifact_links", "module_errors")
-    _optimized = ("module_optimization_config", "module_execution_summary",
-                  "module_samples_summary", "module_selected_sample",
+    _optimized = ("module_samples_summary", "trial_dataset", "module_header",
+                  "module_optimization_config", "module_execution_summary", "module_selected_sample",
                   "module_optimization_progress", "module_artifact_links", "module_errors")
 
     def __init__(self, run_directory: Path):
@@ -233,6 +234,22 @@ class ReportWriter:
         self._parents = {}
         self._sample_anchors = {}
         self._secrets = set()
+        self._module_data = {}
+        self._batch_depth = 0
+        self._pending_modules = set()
+
+    @contextmanager
+    def batch(self):
+        """Publish each complete module once per lifecycle update."""
+        self._batch_depth += 1
+        try:
+            yield
+        finally:
+            self._batch_depth -= 1
+            if self._batch_depth == 0:
+                pending, self._pending_modules = self._pending_modules, set()
+                for key in sorted(pending):
+                    self._save(key)
 
     def add_secrets(self, values):
         def collect(value):
@@ -281,10 +298,8 @@ class ReportWriter:
         return ref
 
     def register_dataset(self, module_id):
-        ref = self._register(("dataset", module_id), "", module_id, ".dataset.md")
-        self._save(("dataset", module_id))
-        from .report_viewer import write_launcher
-        write_launcher(self.root / ref.path)
+        ref = self.ref("module", module_id)
+        self._refs[("dataset", module_id)] = ref
         return ref
 
     def register_review(self, module_id):
@@ -319,10 +334,9 @@ class ReportWriter:
         key = ("run", module_id, run_id)
         if key in self._refs:
             return self._refs[key]
-        stem = str(run_id) if str(run_id).startswith(f"{module_id}-run-") else f"{module_id}-{run_id}" if str(run_id).startswith("run-") else f"{module_id}-run-{run_id}"
-        ref = self._register(key, "runs/", stem)
+        ref = self.ref("module_runs", module_id)
+        self._refs[key] = ref
         self._parents[key] = sample_id
-        self._save(key)
         if sample_id is not None and ("sample", module_id, sample_id) in self._refs:
             self._save(("sample", module_id, sample_id))
         return ref
@@ -362,6 +376,9 @@ class ReportWriter:
         return self._refs[key]
 
     def _save(self, key):
+        if key[0] == 'module' and self._batch_depth:
+            self._pending_modules.add(key)
+            return
         ref = self._refs[key]
         target = self.root / ref.path
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -371,7 +388,7 @@ class ReportWriter:
         elif key[0] == "module":
             module_id = key[1]
             title = f"Module: {self._modules[module_id]['filename']}"
-            order = ("module_header",) + (self._optimized if self._modules[module_id]["optimized"] else self._single)
+            order = self._optimized if self._modules[module_id]["optimized"] else ("module_header",) + self._single
         elif key[0] == "module_runs":
             title, order = f"Module Runs: {self._modules[key[1]]['filename']}", ("module_runs_summary",)
         elif key[0] == "dataset":
@@ -390,7 +407,7 @@ class ReportWriter:
         elif key[0] == "run":
             navigation.append(_link("Back to Runs Report", self.href(ref, self.ref("module_runs", key[1]))))
         elif key[0] == "item":
-            navigation.append(_link("Back to Dataset Report", self.href(ref, self.ref("dataset", key[1]))))
+            navigation.append(_link("Back to Module Report", self.href(ref, self.ref("module", key[1]))))
         elif key[0] != "job":
             navigation.append(_link("Back to job report", self.href(ref, self.ref("job"))))
             if len(key) > 1 and key[0] != "module":
@@ -403,6 +420,29 @@ class ReportWriter:
         tmp = target.with_name(f".{target.name}.tmp")
         tmp.write_text("\n".join(body).rstrip() + "\n", encoding="utf-8")
         _replace_report(tmp, target)
+        if key[0] == "module":
+            from .report_viewer import render_markdown, write_launcher
+            model = {**self._module_data.get(key[1], {}), "schema_version": 1,
+                     "module_id": key[1], "sections": [{"name": name, "markdown": fragments.get(name, '')} for name in order]}
+            data_path = target.with_suffix('.json')
+            temporary = data_path.with_name('.' + data_path.name + '.tmp')
+            content = json.dumps(model, ensure_ascii=False, indent=2, default=str)
+            for secret in sorted(self._secrets, key=len, reverse=True):
+                content = content.replace(secret, '***')
+            temporary.write_text(content + '\n', encoding='utf-8')
+            _replace_report(temporary, data_path)
+            exported = render_markdown(target, content="\n".join(body), bridge=False)
+            html_path = target.with_suffix('.html')
+            temporary = html_path.with_name('.' + html_path.name + '.tmp')
+            temporary.write_text(exported, encoding='utf-8')
+            _replace_report(temporary, html_path)
+            write_launcher(html_path)
+            from .report_viewer import write_inline_report
+            write_inline_report(html_path, target.with_suffix('.inline.html'))
+
+    def write_module_data(self, module_id, data):
+        self._module_data[module_id] = data
+        self._save(('module', module_id))
 
     def write_job_header(self, md_fragment): return self._write(("job",), "job_header", md_fragment)
     def write_module_summary(self, md_fragment): return self._write(("job",), "module_summary", md_fragment)
@@ -420,9 +460,9 @@ class ReportWriter:
     def write_run_report(self, module_id, run_id, md_fragment, *, sample_id=None):
         key = ("run", module_id, run_id)
         if key not in self._refs: self.register_run(module_id, run_id, sample_id=sample_id)
-        return self._write(key, "run_report", md_fragment)
+        return self._refs[key]
     def write_module_runs_summary(self, module_id, md_fragment): return self._write(("module_runs", module_id), "module_runs_summary", md_fragment)
-    def write_trial_dataset(self, module_id, md_fragment): return self._write(("dataset", module_id), "trial_dataset", md_fragment)
+    def write_trial_dataset(self, module_id, md_fragment): return self._write(("module", module_id), "trial_dataset", md_fragment)
     def write_review_report(self, module_id, md_fragment): return self._write(("review", module_id), "review_report", md_fragment)
     def write_worksheet_detection_report(self, module_id, item_id, md_fragment): return self._write(("item", module_id, item_id), "worksheet_detection_report", md_fragment)
 
@@ -485,7 +525,7 @@ class DefaultReportRenderer:
             if setting in config:
                 rows.append((setting.title(), config[setting]))
         if dataset_ref and writer:
-            rows.append(("Dataset", _link("Dataset Report", writer.href(writer.ref("module", module_id), dataset_ref))))
+            rows.append(("Dataset", _link("Items", writer.href(writer.ref("module", module_id), dataset_ref, 'items'))))
         text = "## Configuration\n\n" + _table(("Setting", "Value"), rows)
         dimensions = {d.name for d in space.dimensions}
         text += "\n\n" + _table(("Parameter", "Role", "Value"), ((k, "Variable" if k in dimensions else "Fixed", None if k in dimensions else v) for k, v in space.start.values.items()))
@@ -554,6 +594,13 @@ class DefaultReportRenderer:
                   _result_rows(runs, writer=getattr(sample_trial, "_report_writer", None),
                       module_id=getattr(sample_trial, "_report_module_id", None),
                       source=getattr(sample_trial, "_report_source", None), include_target=True)]
+        writer = getattr(sample_trial, '_report_writer', None)
+        source = getattr(sample_trial, '_report_source', None)
+        if writer and source:
+            notebooks = [_link(run['run_id'], writer.artifact_href(source, run.get('artifacts', {}).get('output_notebook')))
+                         for run in runs if writer.artifact_href(source, run.get('artifacts', {}).get('output_notebook'))]
+            if notebooks:
+                parts += ['## Output Notebooks', ' · '.join(notebooks)]
         return "\n\n".join(parts)
 
     def render_run_report(self, *, run, writer=None, module_id=None, sample_id=None):
@@ -604,8 +651,14 @@ class DefaultReportRenderer:
         sample_headers = []
         for number, trial in enumerate(history, 1):
             sid = getattr(trial, "report_sample_id", None)
+            score = getattr(trial, 'score', None)
+            scores = [getattr(t, 'score', None) for t in history]
+            best = max((s for s in scores if isinstance(s, (int, float))), default=None)
             label = f"Sample {number}"
-            sample_headers.append(_link(label, writer.href(source, writer.ref("sample", module_id, sid))))
+            label = _Markdown(_link(label, writer.href(source, writer.ref("sample", module_id, sid))) + '<br>' + _cell(score))
+            if score is not None and score == best:
+                label = _Markdown('<span class="best-sample">' + label + '</span>')
+            sample_headers.append(label)
         rows = []
         for number, item in enumerate(dataset.items, 1):
             found = [run for trial in history for run in trial.runs if run.get("dataset_item_id") == item["id"]]
@@ -687,8 +740,10 @@ class JobReporting:
     def _samples(self, parent):
         result = []
         for item in parent.get("samples", []) if parent else []:
-            runs = [dict(run, duration=self._duration(run)) for run in item.get("runs", [])]
-            result.append({"id": item["sample_trial_id"], "params": item.get("params", {}),
+            runs = [dict(run, duration=self._duration(run),
+                         item_number=self.writer.item_number(parent['playbook_id'], run.get('dataset_item_id')))
+                    for run in item.get("runs", [])]
+            result.append({"number": len(result) + 1, "id": item["sample_trial_id"], "params": item.get("params", {}),
                 "score": item.get("score"), "metrics": item.get("metrics", {}),
                 "status": item.get("status", "running"), "runs": runs,
                 "duration": self._duration(item)})
@@ -707,6 +762,10 @@ class JobReporting:
             return None
 
     def refresh(self):
+        with self.writer.batch():
+            self._refresh()
+
+    def _refresh(self):
         component, writer, renderer = self.component, self.writer, self.renderer
         report = component.report.data
         writer.add_secrets(component.report._secret_values)
@@ -752,8 +811,7 @@ class JobReporting:
                     writer.write_module_optimization_progress(mid, renderer.render_module_optimization_progress(mode="start_only"))
                 errors = [s["error"] for s in parent.get("samples", []) if s.get("error")] if parent else []
                 outputs = {}
-                if dataset:
-                    outputs["Dataset Report"] = writer.ref("dataset", mid).path
+                outputs["HTML"] = Path(writer.ref("module", mid).path).with_suffix('.html').as_posix()
                 if mid in self._reviews:
                     from .review import render_review
                     writer.write_review_report(mid, render_review(self._reviews[mid], samples=samples,
@@ -781,13 +839,19 @@ class JobReporting:
                     writer.write_module_runs_summary(mid, "## Runs\n\n" + _table(("Run", "Status", "Duration"),
                         [(_link(rid, writer.href(runs_ref, writer.ref("run", mid, rid))), status, duration)]))
                     outputs["Runs Report"] = runs_ref.path
-                    outputs["Run Report"] = writer.ref("run", mid, rid).path
                 errors = [single["error"]] if single and single.get("error") else []
                 summary.append({"id": mid, "name": Path(module.playbook_name).name, "optimized": False,
                                 "status": status, "duration": duration, "outputs": outputs})
             writer.write_module_artifact_links(mid, renderer.render_module_artifact_links(
                 artifacts=outputs, writer=writer, module_id=mid))
             writer.write_module_errors(mid, renderer.render_module_errors(errors=errors))
+            snapshot = {"schema_version": 1, "job_run_id": writer.root.name,
+                        "module_id": mid, "status": status, "duration": duration,
+                        "configuration": module.config, "reproduction": self._reviews.get(mid),
+                        "samples": samples if module.optimizer_config else [],
+                        "items": [{**item, "number": n} for n, item in enumerate(self._datasets[mid].items, 1)] if mid in self._datasets else [],
+                        "execution": single if not module.optimizer_config else parent}
+            writer.write_module_data(mid, snapshot)
         writer.write_module_summary(renderer.render_module_summary(modules=summary, writer=writer))
 
     def register_review(self, module_id, snapshot):
@@ -836,8 +900,6 @@ class JobReporting:
         if isinstance(binding, Mapping):
             sample_trial._report_prompt = self._reviews.get(module_id, {}).get("prompts", {}).get(binding.get("prompt_name"))
         self.writer.register_run(module_id, rid, sample_id=sample_id)
-        self.writer.write_run_report(module_id, rid, sample_trial.render_run_report(
-            run, writer=self.writer, module_id=module_id, sample_id=sample_id), sample_id=sample_id)
         if refresh:
             self.refresh()
 
@@ -846,6 +908,10 @@ class JobReporting:
         self.refresh()
 
     def update_dataset(self, module_id, dataset, history):
+        with self.writer.batch():
+            self._update_dataset(module_id, dataset, history)
+
+    def _update_dataset(self, module_id, dataset, history):
         for trial in history:
             sample_id = getattr(trial, "report_sample_id", None)
             sample_trial = self._sample_trials.get((module_id, sample_id))

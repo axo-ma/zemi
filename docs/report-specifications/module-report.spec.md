@@ -1,7 +1,9 @@
 # Module Report Specification
 
 Status: accepted for implementation.
-Updated: 2026-09-24.
+Updated: 2026-10-02.
+
+The optimized layout starts with Samples, then Items (formerly the separate Dataset Report), then execution metadata and the remaining sections below. Each module has MD, standalone HTML, inline HTML, JSON and a CMD launcher. This order supersedes the old section numbers below.
 
 This specification defines two layouts for the same report type: a module report without an optimizer and a module report with a configured optimizer. The latter covers both `start_only` and `optimize`.
 
@@ -67,7 +69,7 @@ Use the same identity and timing fields as the layout without an optimizer. Repl
 
 Show:
 
-- Dataset identity and size, with a dataset report link when available.
+- Dataset identity and size, with an internal Items link when available.
 - Optimizer identity and relevant configured settings, including the execution budget or stopping criteria when supplied.
 - Evaluation method, score meaning, and optimization direction when defined by the configuration or evaluation contract. Do not invent a direction or score interpretation.
 - A Parameter / Role / Value or search space table separating fixed parameters from parameters eligible for optimization.
@@ -75,7 +77,7 @@ Show:
 
 ### Section 2: Module Execution Summary
 
-Do not include a Runs table or individual run listings in this report. The Runs counter links to the separate Module Runs Report at `<module_id>.runs.md`, which lists runs across all samples and links to individual Run Reports.
+Do not include a Runs table or individual run listings in this report. The Runs counter links to the separate Module Runs Report at `<module_id>.runs.md`, which lists runs across all samples and retains run identifiers without individual Run Report files.
 
 Show Samples OK / total, Runs OK / total, and the actual stop reason. Totals count started executions, as in the entry report; configured budgets remain separately labelled in Configuration. If execution is still running, state that instead of inventing a stop reason.
 
@@ -124,7 +126,7 @@ In `start_only`, retain the section and state `No parameter search was performed
 
 ### Section 6: Module Artifacts
 
-Link available module-level artifacts, dataset reports, and selected-sample artifacts with clear labels. Per-run artifacts for all samples remain accessible through sample reports rather than an unbounded flat file list here. Sample Reports reside in `samples/` and Run Reports in `runs/`, relative to the job run directory.
+Link available module-level artifacts and selected-sample artifacts with clear labels. Per-run artifacts for all samples remain accessible through sample reports rather than an unbounded flat file list here. Sample Reports reside in `samples/`. Individual Run Reports are not generated. Keep the first successful output notebook per sample and all output notebooks for execution/evaluation failures; expose retained notebook links in the Sample Report.
 
 Do not link to a separate Optimization Report: optimization content is embedded above. Display `No output files available.` when appropriate.
 

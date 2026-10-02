@@ -1,10 +1,40 @@
-"""Module-scoped Python kernels; Papermill still executes and saves each run."""
+"""Module-scoped Python kernels and output notebook retention."""
 from __future__ import annotations
 
 import os
 import sys
 from pathlib import Path
 
+def retain_sample_notebooks(runs, entries, run_directory):
+    """Keep the first successful notebook per sample and all failed notebooks.
+
+    Execution still produces each notebook so output extraction and diagnostics
+    retain their existing semantics. Only redundant successful artifacts are removed.
+    """
+    root = Path(run_directory).resolve()
+    kept_success = False
+    for run in runs:
+        if run.get('status') != 'succeeded' or run.get('evaluation_error') or run.get('error'):
+            continue
+        artifacts = run.get('artifacts', {})
+        relative = artifacts.get('output_notebook')
+        if not relative:
+            continue
+        target = (root / relative).resolve()
+        if not target.is_relative_to(root) or target.suffix != '.ipynb':
+            raise ValueError('Output notebook must be an ipynb inside the job run directory')
+        if not target.is_file():
+            continue
+        if not kept_success:
+            kept_success = True
+            continue
+        target.unlink()
+        artifacts.pop('output_notebook', None)
+        for entry in entries:
+            if entry.get('output_notebook') == relative:
+                entry['output_notebook'] = None
+                entry['output_path'] = None
+                entry['notebook_retained'] = False
 _environment = None
 _python_path = None
 

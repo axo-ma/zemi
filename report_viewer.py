@@ -38,17 +38,30 @@ tbody tr:hover,tbody tr:hover td:first-child,tbody tr:hover td.sticky-target{bac
 summary{cursor:pointer}pre{white-space:pre-wrap;overflow-wrap:anywhere;max-width:450px;background:#202529;padding:10px;border-radius:4px;font:12px/1.5 Consolas,monospace}
 details[open]{min-width:180px;max-width:450px}code{font-family:Consolas,monospace}
 .run-error{color:#ef8181}.run-link{white-space:nowrap}
+.best-sample,.best-sample a{color:#33dd88;font-weight:700}
 '''
 
 
-def render_markdown(path):
+def render_markdown(path, *, content=None, bridge=True):
     from markdown_it import MarkdownIt
     path = Path(path).resolve()
-    markup = MarkdownIt('commonmark', {'html': True}).enable('table').render(path.read_text(encoding='utf-8'))
+    markup = MarkdownIt('commonmark', {'html': True}).enable('table').render(
+        path.read_text(encoding='utf-8') if content is None else content)
     # Report HTML supports disclosure tags, but arbitrary scripts must not run
     # with a Python bridge. Remove executable content before adding our script.
     from bs4 import BeautifulSoup
     soup = BeautifulSoup(markup, 'html.parser')
+    import re
+    heading_ids = set()
+    for heading in soup.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'h6']):
+        stem = re.sub(r'[^\w -]', '', heading.get_text().lower()).replace(' ', '-')
+        identity = stem
+        ordinal = 1
+        while identity in heading_ids:
+            identity = f'{stem}-{ordinal}'
+            ordinal += 1
+        heading_ids.add(identity)
+        heading['id'] = identity
     for tag in soup.find_all(['script', 'iframe', 'object', 'embed', 'style', 'link', 'base', 'meta', 'form']):
         tag.decompose()
     for tag in soup.find_all(True):
@@ -59,7 +72,7 @@ def render_markdown(path):
             if attr in tag.attrs and str(tag[attr]).strip().lower().startswith(('javascript:', 'data:', 'vbscript:')):
                 del tag[attr]
     manifest = path.with_suffix('.chat.json')
-    if path.name.endswith('.dataset.md'):
+    if soup.find('table'):  # Also recognize Items in a combined module report.
         table = next((t for t in soup.find_all('table')
                       if (lambda names: names and names[0] == 'Item ID' and
                           set(names[1:3]) == {'Matches', 'Target'})(
@@ -91,7 +104,7 @@ def render_markdown(path):
                     tds[1]['class'] = [*tds[1].get('class', []), 'sticky-target']
                     tds[0]['title'] = tds[0].get_text()
                     tds[1]['title'] = tds[1].get_text()
-            if manifest.is_file():
+            if bridge and manifest.is_file():
                 data = json.loads(manifest.read_text(encoding='utf-8'))
                 for row_index, row in enumerate(table.select('tbody > tr')):
                     tds = row.find_all('td', recursive=False)
@@ -127,7 +140,40 @@ else window.zemiBridge.openLink(a.href);}
             '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; '
             'style-src \'unsafe-inline\'; script-src \'unsafe-inline\' qrc:; img-src file:;">'
             f'<base href="{html.escape(path.parent.as_uri() + "/", quote=True)}">'
-            f'<style>{CSS}</style></head><body>{soup}<script src="qrc:///qtwebchannel/qwebchannel.js"></script><script>{script}</script></body></html>')
+            f'<style>{CSS}</style></head><body>{soup}' +
+            (f'<script src="qrc:///qtwebchannel/qwebchannel.js"></script><script>{script}</script>' if bridge else '') + '</body></html>')
+
+
+def write_inline_report(report, destination):
+    """Export a ready HTML report as a scoped fragment for embedding in chat."""
+    import re
+    from bs4 import BeautifulSoup
+    report, destination = Path(report), Path(destination)
+    soup = BeautifulSoup(report.read_text(encoding='utf-8'), 'html.parser')
+    import hashlib
+    root_id = 'zemi-module-' + hashlib.sha256(str(report.resolve()).encode('utf-8')).hexdigest()[:12]
+    style = soup.find('style').get_text()
+    def scope(match):
+        selectors = match.group(1).strip()
+        return ','.join('#' + root_id if s.strip() == 'body' else
+                        '#' + root_id + ' ' + s.strip() for s in selectors.split(',')) + '{'
+    style = re.sub(r'([^{}]+)\{', scope, style)
+    style = style.replace('margin:20px;', 'margin:0;padding:20px;').replace('max-height:72vh;', '')
+    for tag in soup.find_all('script'):
+        tag.decompose()
+    for a in soup.find_all('a', href=True):
+        if not a['href'].startswith(('https://', '#')):
+            del a['href']
+    for tag in soup.find_all(title=True):
+        tag['data-tooltip'] = tag.attrs.pop('title')
+    for summary in soup.find_all('summary'):
+        summary['class'] = [*summary.get('class', []), 'cursor-interaction']
+    style = style.replace('cursor:pointer', 'cursor:inherit')
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_name('.' + destination.name + '.tmp')
+    temporary.write_text(f'<style>{style}</style><section id="{root_id}">{soup.body.decode_contents()}</section>', encoding='utf-8')
+    os.replace(temporary, destination)
+    return destination
 
 
 def write_launcher(report):
@@ -189,7 +235,7 @@ def main(argv=None):
         nonlocal current, position
         path = Path(path).resolve()
         try:
-            markup = render_markdown(path)
+            markup = render_markdown(path.with_suffix('.md') if path.suffix == '.html' else path)
         except Exception as error:
             QMessageBox.warning(window, 'Cannot open report', str(error))
             return

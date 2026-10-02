@@ -15,16 +15,14 @@ ModuleOptimizer is the optimizer. These names do not represent separate entities
 
 ## 2. Report File Registry
 
-Paths below are relative to the job run directory. Sample Reports reside in `samples/` and Run Reports in `runs/`; they do not reside at the top level. Dataset Item Reports reside in `dataset-items/`. Other report files remain at the top level. File naming uses safe, collision-resistant registered references; artifact paths are recorded by ReportWriter rather than reconstructed by clients.
+Paths below are relative to the job run directory. Sample Reports reside in `samples/`; individual Run Reports are no longer generated and run references resolve to the Module Runs summary; they do not reside at the top level. Dataset Item Reports reside in `dataset-items/`. Other report files remain at the top level. File naming uses safe, collision-resistant registered references; artifact paths are recorded by ReportWriter rather than reconstructed by clients.
 
 | Report type | Filename | Cardinality | Without optimizer | start_only | optimize |
 |---|---|---|---|---|---|
 | Job Report | `index.md` | One per job execution | Yes | Yes | Yes |
-| Module Report | `<module_id>.md` | One per configured module | Yes | Yes | Yes |
+| Module Report | `<module_id>.md`, `.html`, `.inline.html`, `.json`, `.cmd` | One per configured module | Yes | Yes | Yes |
 | Module Runs Report | `<module_id>.runs.md` | One per module with started runs | Yes | Yes | Yes |
 | Sample Report | `samples/<sample_id>.md` | One per started sample | No | Starting sample | Each started sample |
-| Run Report | `runs/<run_id>.md` | One per started run | Single run when started | Each started run | Each started run |
-| Dataset Report | `<module_id>.dataset.md` | One per module with a trial dataset | No | Yes | Yes |
 | Reproduction Report | `<module_id>.reproduction.md` | One per optimized module | No | Yes | Yes |
 | Dataset Item Report | `dataset-items/<module_id>.<item_file_key>.md` | One per dataset item per module | No | Yes | Yes |
 
@@ -44,13 +42,13 @@ Create Job and Module Reports early enough to represent unstarted modules. Creat
 ReportWriter supplies a common document envelope: report title, owning job/module/sample/run identifiers as applicable, and relative navigation links. Clients supply the report content through the fragment methods below. A content fragment must not duplicate the document-level title or navigation envelope.
 
 - Job Report links to Module Reports.
-- Module Report without an optimizer links to its single Run Report and directly to available output IPYNB. Automatic notebook HTML export is removed.
-- Module Report with an optimizer links to Sample Reports and the Dataset Report when applicable. Module Optimization Progress are included in the Module Report itself.
+- Module Report without an optimizer links to its Module Runs summary and directly to available output IPYNB. Automatic notebook HTML export is removed.
+- Module Report with an optimizer links to Sample Reports and embeds the Items table. Module Optimization Progress are included in the Module Report itself.
 - Sample Report has exactly one top navigation link: Back to Module Report. Run links remain in its Runs table.
-- Run Report has exactly one top navigation link: Back to Runs Report. This applies with and without an optimizer; a single-run module also gets a Runs Report.
-- Dataset Reports link back to their Module Report.
+- Run references resolve to the Module Runs summary; no per-run files are created. The legacy write_run_report method is a compatibility no-op.
+- Dataset references resolve to the owning Module Report; write_trial_dataset replaces its Items fragment.
 - Reproduction Reports link to their Module and Job Reports; Module artifacts link to Reproduction Reports. `write_review_report(module_id, md_fragment)` replaces the review fragment. See [Reproduction Report](reproduction-report.spec.md) for its launch-time source snapshot.
-- Every report is identifiable when opened directly. Module Runs has exactly one top link, Back to Module Report; Dataset Item has exactly one top link, Back to Dataset Report. Job, Module, Dataset and Reproduction navigation is unchanged. Resolve destinations from registered references, relative to the source file.
+- Every report is identifiable when opened directly. Module Runs has exactly one top link, Back to Module Report; Dataset Item has exactly one top link, Back to Module Report. Job, Module, Dataset and Reproduction navigation is unchanged. Resolve destinations from registered references, relative to the source file.
 
 Navigation is managed by ReportWriter. Sample headers contain no generated child-run link lists; those links belong in the content tables.
 
@@ -114,14 +112,15 @@ Module header contains execution metadata; ReportWriter's envelope supplies the 
 
 ### Module Report With an Optimizer
 
-1. Module header.
-2. Module optimization config.
-3. Module execution summary.
-4. Module samples summary.
-5. Module selected sample.
-6. Module optimization progress.
-7. Module artifact links.
-8. Module errors.
+1. Module samples summary.
+2. Dataset Items.
+3. Module header.
+4. Module optimization config.
+5. Module execution summary.
+6. Module selected sample.
+7. Module optimization progress.
+8. Module artifact links.
+9. Module errors.
 
 ### Sample, Run, and Dataset Reports
 

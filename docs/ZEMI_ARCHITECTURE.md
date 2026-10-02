@@ -84,3 +84,30 @@ masked in reports. See [Inputs](INPUTS.md) and
 Changes to the parameter architecture MUST update this file and
 [ZEMI Params 0.6](ZEMI_PARAMS_0.6.md). SampleTrial and report details belong in
 [Dataset optimization](DATASET_OPTIMIZATION.md).
+
+
+## Module report exports (2026-10-02)
+
+ReportWriter keeps ordered rendered sections together with module execution
+data. It writes `<module>.json` (schema_version 1), `<module>.md`,
+`<module>.html` and `<module>.inline.html` progressively and at completion.
+HTML uses the same CSS as the CMD viewer. Conversion operates on the in-memory
+sections, without rereading generated Markdown. JSON contains configuration,
+launch reproduction snapshot, sample numbers/IDs/parameters/scores/metrics,
+numbered dataset items and all runs with predictions, statuses, errors,
+captured chat contexts, timings and retained artifact references. It preserves
+full numeric precision; presentation uses three decimal places.
+
+The standalone HTML contains no Qt script and supports native disclosure
+controls offline. Its neighbouring CMD opens the Qt viewer, which adds the
+existing local chat bridge using the neighbouring Markdown and chat manifest.
+The inline export is a scoped HTML fragment using the same report content and
+palette. It removes local file/chat links and Qt scripts; disclosures still
+work. No plugin is required to view it, and it does not launch terminals.
+Codex can display the ready inline file directly without recreating its tables.
+
+Keep the first successful output notebook per sample and every notebook for a
+failed execution/evaluation. Papermill still writes and extracts each notebook;
+after evaluation redundant successful notebooks are removed. Results and raw
+contexts remain available for every run. Source notebook snapshots are retained.
+Single modules without an optimizer keep their single output notebook.

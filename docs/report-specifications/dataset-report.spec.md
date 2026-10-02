@@ -1,17 +1,16 @@
-# Dataset Report Specification
+# Dataset Items Section Specification
 
-Location: `<module_id>.dataset.md` in the run root.
+Location: the Items section of `<module_id>.md` and `<module_id>.html`, immediately after Samples. No separate Dataset Report is generated.
 
 One row per Dataset Item, one prediction column per Sample. Columns:
-`Item ID | Target | Matches | Sample 1 | Sample 2 | ...`.
+`# | Item ID | Target | Matches | Sample 1 | Sample 2 | ...`. The narrow # column links to the Dataset Item Report; Item ID links to the workbook.
 
-The first column, Item ID, links directly to the source Excel file specified by
+The Item ID column links directly to the source Excel file specified by
 `input.workbook_path`. Resolve @comp/@inst paths and URL-encode the relative
 file link. If no workbook is supplied or the file is missing, show plain Item ID.
-The third column, Matches, links to the corresponding Dataset Item Report
+The Matches column links to the corresponding Dataset Item Report
 under `dataset-items/`, including when its value is `—`.
-Sample headers link to Sample Reports and display only `Sample N`, in execution
-order. Do not append prompt names, encoding formats, or other sample parameters.
+Sample headers link to Sample Reports and display `Sample N` with score on the second line (three decimals), in execution order. Missing score is a dash. Highlight the greatest finite score in green, including all ties. Do not append prompt names, encoding formats, or other sample parameters.
 Full sample configuration remains available in the linked Sample Reports.
 Matches shows evaluator-confirmed exact matches / all started results when
 the evaluator provides `metrics.exact_match`; otherwise it is `—`.
@@ -48,9 +47,9 @@ Target is never replaced by a checkmark. Report Sample naming is unchanged.
 
 Standalone TrialDataset rendering uses this same renderer and layout.
 
-An adjacent `.dataset.cmd` opens the Qt interactive viewer. The Markdown table
+An adjacent `<module_id>.cmd` opens the combined Module Report in the Qt interactive viewer. The Markdown table
 remains unchanged; the viewer adds terminal-chat links from the separately saved
-`.dataset.chat.json` contexts. Disclosure triangles still expand immediately.
+`<module_id>.chat.json` contexts. Disclosure triangles still expand immediately.
 The viewer keeps Item ID and Target fixed at the left; Matches and Sample columns
 scroll horizontally. Its window and Windows taskbar use the Dataset Report icon.
 See [Interactive viewer and chat](../REPORT_VIEWER.md).

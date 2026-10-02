@@ -6,7 +6,7 @@ Title: Dataset Item, followed by Item ID and Job run ID. Input is a Parameter /
 Value table built from all item.input fields. Target is item.ground_truth.
 
 Results columns: `Sample | Run | Prediction | Metrics | Error`.
-Sample and Run link to their reports. Prediction uses the generic comparison
+Sample links to its report; Run links to the Module Runs summary. Prediction uses the generic comparison
 value, with ✅ for confirmed exact matches. Full mismatches are displayed here
 without truncation, so Dataset summary links expose the complete result.
 
@@ -24,4 +24,4 @@ verbatim in a fence safe for embedded backticks; otherwise serialize the full
 returned prediction. Dataset Error and `...` links lead here. Missing responses
 do not fabricate text.
 
-Top navigation contains exactly one link: **Back to Dataset Report**. Links in Results remain unchanged.
+Top navigation contains exactly one link: **Back to Module Report**. Links in Results remain unchanged.

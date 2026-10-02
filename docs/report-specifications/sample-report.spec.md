@@ -12,10 +12,10 @@ Sections, in order:
    binding is supplied. Expanded per-item input is not inserted here.
 4. Runs: `Item ID | Run | Target | Prediction | Metrics | Error`.
 
-Item ID and Run link to their registered reports. Target and prediction may
+Item ID links to its detail report; Run links to the Module Runs summary. Target and prediction may
 be arbitrary JSON-compatible values. The comparison_prediction contract and
 exact-match rules are identical to Dataset Report. Long predictions link to
-Run Reports; outputs are preserved there in full.
+the Module Runs summary. Complete predictions, errors and context remain in module JSON and Dataset Item Reports.
 
 Metrics follow the shared slash format: names only in the header, values in
 the same order in rows, `—` for missing values. The list is derived from data.

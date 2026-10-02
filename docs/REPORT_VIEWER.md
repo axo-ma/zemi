@@ -1,6 +1,6 @@
-# Interactive Dataset Report and terminal chat
+# Interactive Module Report and terminal chat
 
-Each Dataset Report has a neighbouring `<module>.dataset.cmd` launcher.
+Each Module Report has a neighbouring `<module>.cmd` launcher. Samples precedes the embedded Items table. No separate Dataset Report or individual Run Reports are generated.
 Double-click it to open the report in a local PyQt5 QWebEngine window. Markdown
 is converted to HTML on demand using markdown-it-py, with HTML tables and
 disclosures preserved. The viewer requires PyQt5, PyQtWebEngine,
@@ -36,7 +36,7 @@ are automatically captured during a notebook run. The captured MIME output conta
 the original messages, JSON request settings, original assistant answer and the
 Arsenal configuration path/checksum and selected endpoint/model names. It contains
 no transport credentials. These outputs are collected separately from predictions
-and persisted in `report.json` and `<module>.dataset.chat.json`. The manifest is
+and persisted in `report.json` and `<module>.chat.json`. The manifest is
 indexed by dataset row and sample column. It does not send ground truth to the model.
 
 The context is not reconstructed from shortened report text or regenerated encodings.
@@ -88,3 +88,30 @@ or library requires regenerating the launcher. The viewer can also be started wi
 Managed llama.cpp stdout/stderr are redirected by the shared Arsenal startup path to unique files under `@inst/_tmp/arsenal-logs/`, for both notebook execution and terminal chats. The console shows startup status and the log path. Launch failures/timeouts include the last 4096 bytes of the log with ANSI sequences removed. External server output is not controlled by ZEMI.
 
 The terminal prints response content incrementally via OpenAI streaming. Complete successful responses are appended and saved only after the finish event; broken streams and tool requests leave the previous conversation intact. A final line shows server-reported completion tokens and total request duration, including input processing. Stream chunks are text fragments, not necessarily individual tokens; chunk count is never presented as token count. Notebook calls keep their existing non-streaming request and capture behavior.
+
+
+## Module report exports (2026-10-02)
+
+ReportWriter keeps ordered rendered sections together with module execution
+data. It writes `<module>.json` (schema_version 1), `<module>.md`,
+`<module>.html` and `<module>.inline.html` progressively and at completion.
+HTML uses the same CSS as the CMD viewer. Conversion operates on the in-memory
+sections, without rereading generated Markdown. JSON contains configuration,
+launch reproduction snapshot, sample numbers/IDs/parameters/scores/metrics,
+numbered dataset items and all runs with predictions, statuses, errors,
+captured chat contexts, timings and retained artifact references. It preserves
+full numeric precision; presentation uses three decimal places.
+
+The standalone HTML contains no Qt script and supports native disclosure
+controls offline. Its neighbouring CMD opens the Qt viewer, which adds the
+existing local chat bridge using the neighbouring Markdown and chat manifest.
+The inline export is a scoped HTML fragment using the same report content and
+palette. It removes local file/chat links and Qt scripts; disclosures still
+work. No plugin is required to view it, and it does not launch terminals.
+Codex can display the ready inline file directly without recreating its tables.
+
+Keep the first successful output notebook per sample and every notebook for a
+failed execution/evaluation. Papermill still writes and extracts each notebook;
+after evaluation redundant successful notebooks are removed. Results and raw
+contexts remain available for every run. Source notebook snapshots are retained.
+Single modules without an optimizer keep their single output notebook.
