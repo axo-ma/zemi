@@ -49,12 +49,11 @@ sticky columns and native disclosures.
 - Order: #, Item ID, Target, Matches, Sample 1, Sample 2, ... .
 - # is 38 px and links to the Item Report. Item ID links to the source workbook.
 - #, Item ID and Target remain visible during horizontal scrolling.
-- Item ID takes its content width. Its inner value is capped at the smaller
-  of 240 px and 30% of the viewport, with ellipsis and the full text in title.
-  Target's sticky offset is measured from the actual Item ID width; do not
-  reserve a fixed 290 px gap for short identifiers.
-- Target uses only its content width, capped at 260 px through a bounded inner
-  span; longer text is truncated, with the full value available through its title.
+- Item ID and Target are each fixed at 200 px including padding, approximately
+  the width of three short Excel ranges. Their inner spans are capped at 180 px.
+  Overflow uses an ellipsis; the complete ID and target are available through
+  title on hover. Do not grow these columns to fit long identifiers or targets.
+  Target's sticky offset follows the actual Item ID column width.
 - Matches and Sample columns sit immediately beside Target. No minimum width
   of 100% is allowed on this table or inherited from a shared table rule.
 - Each Sample header contains only Sample N and the score on the next line.
