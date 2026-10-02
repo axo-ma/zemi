@@ -53,6 +53,16 @@ def _table(headers, rows):
                       *("| " + " | ".join(_cell(v) for v in row) + " |" for row in rows)))
 
 
+def _metric_lines(values):
+    values = list(values)
+    if not values:
+        return _Markdown('—')
+    if len(values) < 2:
+        return _Markdown(values[0])
+    middle = (len(values) + 1) // 2
+    return _Markdown(' / '.join(values[:middle]) + ' /<br>' + ' / '.join(values[middle:]))
+
+
 def _link(label, href):
     return _Markdown(f"[{_cell(label)}]({href})") if href else _cell(label)
 
@@ -174,7 +184,7 @@ def _result_rows(runs, *, writer=None, module_id=None, source=None, include_targ
     headers = (["Sample"] if include_sample else ["#", "Item ID"]) + ["Run"]
     if include_target:
         headers.append("Target")
-    headers += ["Prediction", "Metrics<br>" + (" / ".join(metrics) or "—"), "Error"]
+    headers += ["Prediction", "Metrics<br>" + _metric_lines(metrics), "Error"]
     rows = []
     for run in runs:
         item_id = run.get("dataset_item_id", (run.get("item") or {}).get("id"))
@@ -193,7 +203,7 @@ def _result_rows(runs, *, writer=None, module_id=None, source=None, include_targ
         if include_target:
             row.append((run.get("item") or {}).get("ground_truth"))
         row += [_prediction_cell(run, href=None if include_sample else run_href),
-                " / ".join(_cell(run.get("metrics", {}).get(key)) for key in metrics) or "—",
+                _metric_lines(_cell(run.get("metrics", {}).get(key)) for key in metrics),
                 run.get("error") or run.get("evaluation_error")]
         rows.append(row)
     return _table(headers, rows) if rows else "No runs available."
@@ -542,14 +552,14 @@ class DefaultReportRenderer:
         source = writer.ref("module", module_id)
         metrics = sorted({name for sample in samples for name in sample.get("metrics", {})})
         headers = ("Sample", "Parameters<br>" + (" / ".join(param_names) or "—"), "Score", "Status",
-                   "Metrics<br>" + (" / ".join(metrics) or "—"), "Runs<br>(OK / Total)", "Mean Tokens<br>(item / prompt)", "Duration<br>(module / LM)")
+                   "Metrics<br>" + _metric_lines(metrics), "Runs<br>(OK / Total)", "Mean Tokens<br>(item / prompt)", "Duration<br>(module / LM)")
         rows = []
         for number, sample in enumerate(samples, 1):
             sid = sample["id"]
             rows.append((_link(number, writer.href(source, writer.ref("sample", module_id, sid))),
                 " / ".join(_cell(_summary_params(sample.get("params", {})).get(k)) for k in param_names) or "—",
                 sample.get("score"), sample.get("status"),
-                " / ".join(_cell(sample.get("metrics", {}).get(k)) for k in metrics) or "—",
+                _metric_lines(_cell(sample.get("metrics", {}).get(k)) for k in metrics),
                 _link(_count(sample.get("runs", [])), writer.href(source, writer.ref("module_runs", module_id), writer.sample_anchor(sid))),
                 " / ".join(_cell(_mean_output(sample.get("runs", []), name)) for name in ("item_tokens", "prompt_tokens")),
                 " / ".join(_cell(value) for value in (sample.get("duration"), _lm_duration(sample.get("runs", []))))))

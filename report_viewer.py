@@ -99,6 +99,28 @@ def render_markdown(path, *, content=None, bridge=True):
             if attr in tag.attrs and str(tag[attr]).strip().lower().startswith(('javascript:', 'data:', 'vbscript:')):
                 del tag[attr]
     manifest = path.with_suffix('.chat.json')
+    # Keep legacy saved Markdown readable with the current two-line metric layout.
+    for table in soup.find_all('table'):
+        for column, header in enumerate(table.select('thead th')):
+            if not header.get_text().startswith('Metrics') or ' / ' not in header.get_text():
+                continue
+            for cell in [header, *(row.find_all('td', recursive=False)[column]
+                                    for row in table.select('tbody > tr')
+                                    if len(row.find_all('td', recursive=False)) > column)]:
+                text = cell.get_text()
+                if cell is header:
+                    text = text.removeprefix('Metrics')
+                parts = [part.strip() for part in text.split('/')]
+                if len(parts) < 2:
+                    continue
+                middle = (len(parts) + 1) // 2
+                cell.clear()
+                if cell is header:
+                    cell.append('Metrics')
+                    cell.append(soup.new_tag('br'))
+                cell.append(' / '.join(parts[:middle]) + ' /')
+                cell.append(soup.new_tag('br'))
+                cell.append(' / '.join(parts[middle:]))
     for candidate in soup.find_all('table'):
         names = [h.get_text().splitlines()[0] for h in candidate.select('thead th')]
         if names and names[0] == 'Sample' and 'Score' in names:

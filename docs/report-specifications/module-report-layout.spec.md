@@ -30,6 +30,11 @@ sticky columns and native disclosures.
 
 ## Samples
 
+- Slash-separated metric names and their values use two aligned lines, split
+  after the first half of the metric list. Preserve metric order and place
+  the slash at the end of the first line. Apply this to headers and cells,
+  including result tables in sample/item reports. Do not truncate metrics.
+
 - First column is the one-based Sample number linking to its Sample Report.
 - It has a 38 px minimum footprint and 4 px horizontal padding; its width grows
   only when required by its header or number, never to 290 px.
