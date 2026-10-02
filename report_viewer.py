@@ -12,6 +12,9 @@ from urllib.parse import quote
 
 REPORT_SCRIPT = r'''
 (function(){
+function fitTables(){document.querySelectorAll('.table-wrap').forEach(wrapper=>{const table=wrapper.querySelector('table');if(!table)return;const rows=[...table.querySelectorAll('tbody > tr')];if(rows.length<=10){wrapper.style.maxHeight='none';return;}const header=table.querySelector('thead');const height=(header?.getBoundingClientRect().height||0)+rows.slice(0,10).reduce((total,row)=>total+row.getBoundingClientRect().height,0)+2;wrapper.style.maxHeight=height+'px';});}
+requestAnimationFrame(fitTables);
+window.addEventListener('resize',fitTables);
 if(window.qt && typeof QWebChannel==='function')new QWebChannel(qt.webChannelTransport,c=>{window.zemiBridge=c.objects.zemi;});
 function status(message){let el=document.getElementById('zemi-action-status');if(!el){el=document.createElement('div');el.id='zemi-action-status';el.setAttribute('role','status');document.body.prepend(el);}el.textContent=message;}
 document.addEventListener('click',async function(e){
@@ -26,7 +29,7 @@ const result=await window.openai.callTool('zemi_report_action',{report:document.
 let data=result?.structuredContent;
 if(!data)for(const block of result?.content||[])if(block.type==='text')try{data=JSON.parse(block.text);}catch{}
 if(result?.isError||!data)throw Error(data?.error||'Действие не подтверждено');
-if(data.html){const parsed=new DOMParser().parseFromString(data.html,'text/html');document.body.innerHTML=parsed.body.innerHTML;document.body.dataset.report=parsed.body.dataset.report;const base=document.querySelector('base');if(base)base.href=parsed.querySelector('base').href;document.title=parsed.title;const hash=data.fragment;if(hash)document.getElementById(hash)?.scrollIntoView();}
+if(data.html){const parsed=new DOMParser().parseFromString(data.html,'text/html');document.body.innerHTML=parsed.body.innerHTML;document.body.dataset.report=parsed.body.dataset.report;const base=document.querySelector('base');if(base)base.href=parsed.querySelector('base').href;document.title=parsed.title;fitTables();const hash=data.fragment;if(hash)document.getElementById(hash)?.scrollIntoView();}
 else if(data.open_requested)status('Запрос на открытие передан Windows.');
 else throw Error(data.error||'Действие не подтверждено');
 }catch(error){status('Ошибка: '+error.message);}
@@ -155,18 +158,13 @@ def render_markdown(path, *, content=None, bridge=True):
                         contexts = cell.get('contexts', [])
                         if len(contexts) != 1 or not contexts[0].get('source') or contexts[0].get('unsupported_fields'):
                             continue
-                        details = td.find('details')
-                        target = td
+                        target = td.find('summary') or td
                         anchor = soup.new_tag('a', href=f'zemi-chat:{row_index}:{column}')
                         anchor['class'] = 'run-link' + (' run-error' if target.get_text().startswith('Error') else '')
                         anchor['title'] = 'Продолжить в терминале'
-                        if details:
-                            anchor.string = 'Продолжить в терминале'
-                            details.append(anchor)
-                        else:
-                            for child in list(target.contents):
-                                anchor.append(child.extract())
-                            target.append(anchor)
+                        for child in list(target.contents):
+                            anchor.append(child.extract())
+                        target.append(anchor)
     from urllib.parse import urlsplit, urlunsplit
     for anchor in soup.find_all('a', href=True):
         address = urlsplit(anchor['href'])

@@ -19,6 +19,10 @@ sticky columns and native disclosures.
   or distribute unused width among columns, even with only one sample.
 - Each table has its own horizontal scroll container. Headers remain visible
   when scrolling vertically in the local viewer.
+- In interactive HTML, show at most 10 body rows before internal vertical
+  scrolling. Calculate the height from the header and the first 10 rendered
+  rows, independently for each table. Shorter tables use their natural height.
+  Apply the same rule in CMD and Codex, including after report navigation.
 - Adjacent columns have ordinary cell padding, with no artificial spacers.
 - Dark background, cyan links, green exact-match checks, red error labels.
 - The standalone HTML, CMD viewer and inline HTML use the same table classes
@@ -50,8 +54,13 @@ sticky columns and native disclosures.
 - Exact match is a green check with no repeated prediction. A single incorrect
   range is plain text. Multiple results show the first result with an ellipsis
   and expand in place. Errors disclose the reason and raw model response.
-- Sample chat actions are available in the native viewer only when an actual
+- Sample chat actions work in the CMD viewer and Codex MCP App when an actual
   captured context supports them. They do not alter the column mapping.
+- Chat links must be visible at the top level of every supported sample cell:
+  the checkmark, range or Error label itself is the link. Do not put a separate
+  "Continue in terminal" link inside expanded details or add a text label to
+  the table. For details cells the label opens chat and the native disclosure
+  arrow expands/collapses the details in place.
 
 ## Regression checks
 
