@@ -12,9 +12,10 @@ from urllib.parse import quote
 
 REPORT_SCRIPT = r'''
 (function(){
+function fitSticky(){document.querySelectorAll('table.dataset-items').forEach(table=>{const item=table.querySelector('th.sticky-item');if(item)table.style.setProperty('--item-width',item.getBoundingClientRect().width+'px');});}
 function fitTables(){document.querySelectorAll('.table-wrap').forEach(wrapper=>{const table=wrapper.querySelector('table');if(!table)return;const rows=[...table.querySelectorAll('tbody > tr')];if(rows.length<=10){wrapper.style.maxHeight='none';return;}const header=table.querySelector('thead');const height=(header?.getBoundingClientRect().height||0)+rows.slice(0,10).reduce((total,row)=>total+row.getBoundingClientRect().height,0)+2;wrapper.style.maxHeight=height+'px';});}
-requestAnimationFrame(fitTables);
-window.addEventListener('resize',fitTables);
+requestAnimationFrame(()=>{fitTables();fitSticky();});
+window.addEventListener('resize',()=>{fitTables();fitSticky();});
 if(window.qt && typeof QWebChannel==='function')new QWebChannel(qt.webChannelTransport,c=>{window.zemiBridge=c.objects.zemi;});
 function status(message){let el=document.getElementById('zemi-action-status');if(!el){el=document.createElement('div');el.id='zemi-action-status';el.setAttribute('role','status');document.body.prepend(el);}el.textContent=message;}
 document.addEventListener('click',async function(e){
@@ -29,7 +30,7 @@ const result=await window.openai.callTool('zemi_report_action',{report:document.
 let data=result?.structuredContent;
 if(!data)for(const block of result?.content||[])if(block.type==='text')try{data=JSON.parse(block.text);}catch{}
 if(result?.isError||!data)throw Error(data?.error||'Действие не подтверждено');
-if(data.html){const parsed=new DOMParser().parseFromString(data.html,'text/html');document.body.innerHTML=parsed.body.innerHTML;document.body.dataset.report=parsed.body.dataset.report;const base=document.querySelector('base');if(base)base.href=parsed.querySelector('base').href;document.title=parsed.title;fitTables();const hash=data.fragment;if(hash)document.getElementById(hash)?.scrollIntoView();}
+if(data.html){const parsed=new DOMParser().parseFromString(data.html,'text/html');document.body.innerHTML=parsed.body.innerHTML;document.body.dataset.report=parsed.body.dataset.report;const base=document.querySelector('base');if(base)base.href=parsed.querySelector('base').href;document.title=parsed.title;fitTables();fitSticky();const hash=data.fragment;if(hash)document.getElementById(hash)?.scrollIntoView();}
 else if(data.open_requested)status('Запрос на открытие передан Windows.');
 else throw Error(data.error||'Действие не подтверждено');
 }catch(error){status('Ошибка: '+error.message);}
@@ -54,13 +55,14 @@ th,td{border-bottom:1px solid #393d40;padding:7px 10px;text-align:left;vertical-
 th{background:#191c1e;position:sticky;top:0;z-index:3;font-weight:600}
 .module-samples .sample-number{box-sizing:border-box;width:38px;min-width:38px;padding:7px 4px;text-align:center}
 .dataset-items .target-value{display:inline-block;max-width:260px;overflow:hidden;text-overflow:ellipsis;vertical-align:top}
-.dataset-items .sticky-item{position:sticky;left:0;box-sizing:border-box;width:290px;min-width:290px;max-width:290px;background:#111314;z-index:2;overflow:hidden;text-overflow:ellipsis}
-.dataset-items .sticky-target{position:sticky;left:290px;box-sizing:border-box;max-width:260px;background:#111314;z-index:2;overflow:hidden;text-overflow:ellipsis;box-shadow:2px 0 0 #393d40}
+.dataset-items .item-value{display:inline-block;max-width:min(240px,30vw);overflow:hidden;text-overflow:ellipsis;vertical-align:top}
+.dataset-items .sticky-item{position:sticky;left:0;box-sizing:border-box;width:1px;background:#111314;z-index:2}
+.dataset-items .sticky-target{position:sticky;left:var(--item-width,240px);box-sizing:border-box;max-width:260px;background:#111314;z-index:2;overflow:hidden;text-overflow:ellipsis;box-shadow:2px 0 0 #393d40}
 .dataset-items th.sticky-item,.dataset-items th.sticky-target{background:#191c1e;z-index:4}
 .dataset-items .sticky-number{position:sticky;left:0;box-sizing:border-box;width:38px;min-width:38px;max-width:38px;padding:6px 4px;text-align:center;background:#111314;z-index:2}
 .dataset-items th.sticky-number{background:#191c1e;z-index:4}
 .dataset-items.numbered .sticky-item{left:38px}
-.dataset-items.numbered .sticky-target{left:328px}
+.dataset-items.numbered .sticky-target{left:calc(38px + var(--item-width,240px))}
 tbody tr:hover,tbody tr:hover td:first-child,tbody tr:hover td.sticky-target{background:#1b2023}
 summary{cursor:pointer}pre{white-space:pre-wrap;overflow-wrap:anywhere;max-width:450px;background:#202529;padding:10px;border-radius:4px;font:12px/1.5 Consolas,monospace}
 details[open]{min-width:180px;max-width:450px}code{font-family:Consolas,monospace}
@@ -160,6 +162,10 @@ def render_markdown(path, *, content=None, bridge=True):
                     tds[0]['class'] = [*tds[0].get('class', []), 'sticky-item']
                     tds[1]['class'] = [*tds[1].get('class', []), 'sticky-target']
                     tds[0]['title'] = tds[0].get_text()
+                    item_value = soup.new_tag('span', attrs={'class': 'item-value'})
+                    for child in list(tds[0].contents):
+                        item_value.append(child.extract())
+                    tds[0].append(item_value)
                     tds[1]['title'] = tds[1].get_text()
                     target_value = soup.new_tag('span', attrs={'class': 'target-value'})
                     for child in list(tds[1].contents):
