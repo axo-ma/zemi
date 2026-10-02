@@ -10,6 +10,30 @@ import subprocess
 import sys
 from urllib.parse import quote
 
+REPORT_SCRIPT = r'''
+(function(){
+if(window.qt && typeof QWebChannel==='function')new QWebChannel(qt.webChannelTransport,c=>{window.zemiBridge=c.objects.zemi;});
+function status(message){let el=document.getElementById('zemi-action-status');if(!el){el=document.createElement('div');el.id='zemi-action-status';el.setAttribute('role','status');document.body.prepend(el);}el.textContent=message;}
+document.addEventListener('click',async function(e){
+const a=e.target.closest('a[href]');if(!a)return;
+const href=a.getAttribute('href');if(href.startsWith('#'))return;
+if(window.zemiBridge){e.preventDefault();e.stopPropagation();if(href.startsWith('zemi-chat:'))window.zemiBridge.openChat(href);else window.zemiBridge.openLink(a.href);return;}
+if(typeof window.openai?.callTool!=='function'){if(href.startsWith('zemi-chat:')){e.preventDefault();status('Для чата откройте отчёт через CMD или Codex MCP.');}return;}
+e.preventDefault();e.stopPropagation();
+try{
+status('Открываем…');
+const result=await window.openai.callTool('zemi_report_action',{report:document.body.dataset.report,href});
+let data=result?.structuredContent;
+if(!data)for(const block of result?.content||[])if(block.type==='text')try{data=JSON.parse(block.text);}catch{}
+if(result?.isError||!data)throw Error(data?.error||'Действие не подтверждено');
+if(data.html){const parsed=new DOMParser().parseFromString(data.html,'text/html');document.body.innerHTML=parsed.body.innerHTML;document.body.dataset.report=parsed.body.dataset.report;const base=document.querySelector('base');if(base)base.href=parsed.querySelector('base').href;document.title=parsed.title;const hash=data.fragment;if(hash)document.getElementById(hash)?.scrollIntoView();}
+else if(data.open_requested)status('Запрос на открытие передан Windows.');
+else throw Error(data.error||'Действие не подтверждено');
+}catch(error){status('Ошибка: '+error.message);}
+},true);
+})();
+'''
+
 if __package__ in {None, ''}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     __package__ = 'zemi'
@@ -20,13 +44,13 @@ WINDOWS_APP_ID = 'ZEMI.DatasetReport'
 CSS = '''
 body{margin:20px;background:#111314;color:#c6c9cc;font:14px/1.45 "Segoe UI",sans-serif}
 h1{font-size:23px;color:#eee}h2{font-size:18px}a{color:#40b1d5;text-decoration:none}a:hover,a:focus-visible{text-decoration:underline;text-underline-offset:3px}
-.table-wrap{overflow:auto;max-height:72vh;border:1px solid #303538}
-table{border-collapse:separate;border-spacing:0;font-size:13px;min-width:100%;width:max-content}
+.table-wrap{overflow:auto;max-height:72vh;width:max-content;max-width:100%;box-sizing:border-box;border:1px solid #303538}
+table{border-collapse:separate;border-spacing:0;font-size:13px;min-width:0;width:max-content}
 table.dataset-items{min-width:0;width:max-content}
 th,td{border-bottom:1px solid #393d40;padding:7px 10px;text-align:left;vertical-align:top;white-space:nowrap}
 th{background:#191c1e;position:sticky;top:0;z-index:3;font-weight:600}
-table:not(.dataset-items) td:first-child{position:sticky;left:0;background:#111314;z-index:2;min-width:290px;box-shadow:2px 0 0 #393d40}
-table:not(.dataset-items) th:first-child{left:0;z-index:4;min-width:290px;box-shadow:2px 0 0 #393d40}
+.module-samples .sample-number{box-sizing:border-box;width:38px;min-width:38px;padding:7px 4px;text-align:center}
+.dataset-items .target-value{display:inline-block;max-width:260px;overflow:hidden;text-overflow:ellipsis;vertical-align:top}
 .dataset-items .sticky-item{position:sticky;left:0;box-sizing:border-box;width:290px;min-width:290px;max-width:290px;background:#111314;z-index:2;overflow:hidden;text-overflow:ellipsis}
 .dataset-items .sticky-target{position:sticky;left:290px;box-sizing:border-box;max-width:260px;background:#111314;z-index:2;overflow:hidden;text-overflow:ellipsis;box-shadow:2px 0 0 #393d40}
 .dataset-items th.sticky-item,.dataset-items th.sticky-target{background:#191c1e;z-index:4}
@@ -72,6 +96,14 @@ def render_markdown(path, *, content=None, bridge=True):
             if attr in tag.attrs and str(tag[attr]).strip().lower().startswith(('javascript:', 'data:', 'vbscript:')):
                 del tag[attr]
     manifest = path.with_suffix('.chat.json')
+    for candidate in soup.find_all('table'):
+        names = [h.get_text().splitlines()[0] for h in candidate.select('thead th')]
+        if names and names[0] == 'Sample' and 'Score' in names:
+            candidate['class'] = [*candidate.get('class', []), 'module-samples']
+            for row in candidate.select('thead > tr, tbody > tr'):
+                first = row.find(['th', 'td'], recursive=False)
+                if first:
+                    first['class'] = [*first.get('class', []), 'sample-number']
     if soup.find('table'):  # Also recognize Items in a combined module report.
         table = next((t for t in soup.find_all('table')
                       if (lambda names: names and names[0] == 'Item ID' and
@@ -104,7 +136,11 @@ def render_markdown(path, *, content=None, bridge=True):
                     tds[1]['class'] = [*tds[1].get('class', []), 'sticky-target']
                     tds[0]['title'] = tds[0].get_text()
                     tds[1]['title'] = tds[1].get_text()
-            if bridge and manifest.is_file():
+                    target_value = soup.new_tag('span', attrs={'class': 'target-value'})
+                    for child in list(tds[1].contents):
+                        target_value.append(child.extract())
+                    tds[1].append(target_value)
+            if manifest.is_file():
                 data = json.loads(manifest.read_text(encoding='utf-8'))
                 for row_index, row in enumerate(table.select('tbody > tr')):
                     tds = row.find_all('td', recursive=False)
@@ -119,29 +155,34 @@ def render_markdown(path, *, content=None, bridge=True):
                         contexts = cell.get('contexts', [])
                         if len(contexts) != 1 or not contexts[0].get('source') or contexts[0].get('unsupported_fields'):
                             continue
-                        target = td.find('summary') or td
+                        details = td.find('details')
+                        target = td
                         anchor = soup.new_tag('a', href=f'zemi-chat:{row_index}:{column}')
                         anchor['class'] = 'run-link' + (' run-error' if target.get_text().startswith('Error') else '')
                         anchor['title'] = 'Продолжить в терминале'
-                        for child in list(target.contents):
-                            anchor.append(child.extract())
-                        target.append(anchor)
+                        if details:
+                            anchor.string = 'Продолжить в терминале'
+                            details.append(anchor)
+                        else:
+                            for child in list(target.contents):
+                                anchor.append(child.extract())
+                            target.append(anchor)
+    from urllib.parse import urlsplit, urlunsplit
+    for anchor in soup.find_all('a', href=True):
+        address = urlsplit(anchor['href'])
+        if address.path.lower().endswith('.md') and address.scheme in {'', 'file'}:
+            anchor['href'] = urlunsplit(address._replace(path=address.path[:-3] + '.html'))
     for table in soup.find_all('table'):
         wrapper = soup.new_tag('div', attrs={'class': 'table-wrap'})
         table.wrap(wrapper)
-    script = '''new QWebChannel(qt.webChannelTransport,function(channel){window.zemiBridge=channel.objects.zemi;});
-document.addEventListener('click', function(e){
-const a=e.target.closest('a[href]');if(!a||a.getAttribute('href').startsWith('#'))return;
-e.preventDefault();e.stopPropagation();if(window.zemiBridge){
-if(a.getAttribute('href').startsWith('zemi-chat:'))window.zemiBridge.openChat(a.getAttribute('href'));
-else window.zemiBridge.openLink(a.href);}
-},true);'''
     return ('<!doctype html><html><head><meta charset="utf-8">'
             '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; '
             'style-src \'unsafe-inline\'; script-src \'unsafe-inline\' qrc:; img-src file:;">'
             f'<base href="{html.escape(path.parent.as_uri() + "/", quote=True)}">'
-            f'<style>{CSS}</style></head><body>{soup}' +
-            (f'<script src="qrc:///qtwebchannel/qwebchannel.js"></script><script>{script}</script>' if bridge else '') + '</body></html>')
+            f'<title>{html.escape(path.stem)}</title><style>{CSS}</style></head>'
+            f'<body data-report="{html.escape(str(path.with_suffix(".html")), quote=True)}">{soup}' +
+            '<script>if(window.qt)document.write(\'<script src="qrc:///qtwebchannel/qwebchannel.js"><\\/script>\');</script>'
+            f'<script>{REPORT_SCRIPT}</script></body></html>')
 
 
 def write_inline_report(report, destination):
@@ -235,7 +276,7 @@ def main(argv=None):
         nonlocal current, position
         path = Path(path).resolve()
         try:
-            markup = render_markdown(path.with_suffix('.md') if path.suffix == '.html' else path)
+            markup = path.read_text(encoding='utf-8') if path.suffix == '.html' else render_markdown(path)
         except Exception as error:
             QMessageBox.warning(window, 'Cannot open report', str(error))
             return
@@ -261,7 +302,7 @@ def main(argv=None):
             if kind == self.NavigationTypeLinkClicked:
                 if url.isLocalFile():
                     path = Path(url.toLocalFile())
-                    if path.suffix.lower() == '.md':
+                    if path.suffix.lower() in {'.md', '.html'}:
                         QTimer.singleShot(0, lambda: open_report(path))
                     else:
                         QDesktopServices.openUrl(url)
@@ -277,7 +318,7 @@ def main(argv=None):
             url = QUrl(address)
             if url.isLocalFile():
                 path = Path(url.toLocalFile())
-                if path.suffix.lower() == '.md':
+                if path.suffix.lower() in {'.md', '.html'}:
                     QTimer.singleShot(0, lambda: open_report(path))
                 else:
                     QDesktopServices.openUrl(url)

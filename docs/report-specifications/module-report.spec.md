@@ -3,6 +3,10 @@
 Status: accepted for implementation.
 Updated: 2026-10-02.
 
+Visual sizing, sticky columns and compact Samples/Items behavior are specified
+in [Module Report Layout](module-report-layout.spec.md). They apply to standalone
+HTML, the CMD viewer and inline HTML and must survive report consolidation.
+
 The optimized layout starts with Samples, then Items (formerly the separate Dataset Report), then execution metadata and the remaining sections below. Each module has MD, standalone HTML, inline HTML, JSON and a CMD launcher. This order supersedes the old section numbers below.
 
 This specification defines two layouts for the same report type: a module report without an optimizer and a module report with a configured optimizer. The latter covers both `start_only` and `optimize`.

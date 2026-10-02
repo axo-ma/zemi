@@ -222,3 +222,12 @@ The reporting flow is:
 - Exact identifier encoding, registration API, and integration with execution lifecycle remain implementation design items.
 
 This is the implemented architecture and file/fragment registry.
+
+## Paired Markdown and HTML output
+
+Every writer-managed report update atomically replaces both its MD and HTML
+snapshot. The HTML uses the shared report viewer renderer and actions for Qt
+or Codex MCP. Local `.md` report links are rewritten to `.html` only in HTML;
+MD remains suitable for GitHub. Only Module Reports receive CMD launchers,
+module JSON and inline HTML. Dataset chat manifests are persisted before the
+module HTML is refreshed so cell actions work in the generated snapshot.

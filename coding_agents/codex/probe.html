@@ -1,0 +1,88 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>ZEMI: HTML → plugin probe</title>
+<style>body{background:#111314;color:#ddd;font:16px system-ui;margin:32px}button{padding:12px;color:#fff;background:#663edb;border:0;border-radius:6px}pre{white-space:pre-wrap;color:#40b1d5}</style>
+<h1>HTML → инструмент плагина</h1>
+<p>Проверка связи и открытие тестового Excel-файла через Windows.</p>
+<button id="probe">Проверить вызов</button>
+<button id="excel">Открыть выбранный Excel</button>
+<button id="chat">Открыть выбранный терминальный чат</button>
+<pre id="result"></pre>
+<script>
+const output=document.getElementById('result');
+const pending=new Map();let counter=0;
+const emit=value=>{output.textContent=JSON.stringify(value,null,2)};
+function rpc(method,params){
+ const id=++counter;
+ return new Promise((resolve,reject)=>{
+  const timer=setTimeout(()=>{pending.delete(id);reject(new Error('Хост не ответил на '+method+' за 3 секунды'))},3000);
+  pending.set(id,{resolve,reject,timer});
+  window.parent.postMessage({jsonrpc:'2.0',id,method,params},'*');
+ });
+}
+window.addEventListener('message',event=>{
+ if(event.source!==window.parent)return;
+ const data=event.data;if(!data||data.jsonrpc!=='2.0'||!pending.has(data.id))return;
+ const p=pending.get(data.id);pending.delete(data.id);clearTimeout(p.timer);
+ if(data.error)p.reject(new Error(JSON.stringify(data.error)));else p.resolve(data.result);
+});
+emit({page:location.href,iframe:window.parent!==window,openaiCallTool:typeof window.openai?.callTool});
+document.getElementById('chat').onclick=async()=>{
+ const button=document.getElementById('chat');button.disabled=true;
+ emit({status:'Запускаем терминальный чат…'});
+ try{
+  let result;
+  if(typeof window.openai?.callTool==='function')result=await window.openai.callTool('zemi_probe_open_chat',{});
+  else{
+   await rpc('ui/initialize',{protocolVersion:'2026-01-26',appInfo:{name:'ZEMI bridge probe',version:'0.1.0'},appCapabilities:{}});
+   window.parent.postMessage({jsonrpc:'2.0',method:'ui/notifications/initialized',params:{}},'*');
+   result=await rpc('tools/call',{name:'zemi_probe_open_chat',arguments:{}});
+  }
+  let payload=result?.structuredContent;
+  if(!payload)for(const block of result?.content||[])if(block.type==='text')try{payload=JSON.parse(block.text)}catch{}
+  emit({status:payload?.open_requested===true?'Процесс запущен. Проверьте окно терминального чата.':'Запуск не подтвержден',result:result??null});
+ }catch(error){emit({status:'Ошибка запуска чата',error:error.message})}
+ finally{button.disabled=false}
+};
+document.getElementById('excel').onclick=async()=>{
+ const button=document.getElementById('excel');button.disabled=true;
+ emit({status:'Отправляем запрос на открытие Excel…'});
+ try{
+  let result;
+  if(typeof window.openai?.callTool==='function')result=await window.openai.callTool('zemi_probe_open_excel',{});
+  else{
+   await rpc('ui/initialize',{protocolVersion:'2026-01-26',appInfo:{name:'ZEMI bridge probe',version:'0.1.0'},appCapabilities:{}});
+   window.parent.postMessage({jsonrpc:'2.0',method:'ui/notifications/initialized',params:{}},'*');
+   result=await rpc('tools/call',{name:'zemi_probe_open_excel',arguments:{}});
+  }
+  let payload=result?.structuredContent;
+  if(!payload)for(const block of result?.content||[])if(block.type==='text')try{payload=JSON.parse(block.text)}catch{}
+  emit({status:payload?.open_requested===true?'Windows приняла запрос. Проверьте, открылся ли Excel.':'Открытие не подтверждено',result:result??null});
+ }catch(error){emit({status:'Ошибка открытия',error:error.message})}
+ finally{button.disabled=false}
+};
+document.getElementById('probe').onclick=async()=>{
+ const start=Date.now();
+ emit({status:'Проверяем host bridge…'});
+ try{
+  let result;
+  if(typeof window.openai?.callTool==='function') result=await window.openai.callTool('zemi_probe_ping',{message:'HTML button clicked'});
+  else{
+   const initialized=await rpc('ui/initialize',{protocolVersion:'2026-01-26',appInfo:{name:'ZEMI bridge probe',version:'0.1.0'},appCapabilities:{}});
+   window.parent.postMessage({jsonrpc:'2.0',method:'ui/notifications/initialized',params:{}},'*');
+   result=await rpc('tools/call',{name:'zemi_probe_ping',arguments:{message:'HTML button clicked'}});
+  }
+  let payload=result?.structuredContent;
+  if(!payload && Array.isArray(result?.content)){
+   for(const block of result.content){
+    if(block.type==='text')try{const parsed=JSON.parse(block.text);if(parsed.pong===true)payload=parsed}catch{}
+   }
+  }
+  if(!payload && result?.pong===true)payload=result;
+  emit({status:payload?.pong===true?'Подтверждено: инструмент вернул pong':'Вызов НЕ подтверждён: нет pong от инструмента',
+   transport:typeof window.openai?.callTool==='function'?'window.openai.callTool':'MCP Apps postMessage',
+   responseType:typeof result,result:result===undefined?null:result,
+   elapsedMs:Date.now()-start});
+ }catch(error){emit({status:'Вызов через плагин не подтверждён',error:error.message,iframe:window.parent!==window,openaiCallTool:typeof window.openai?.callTool,elapsedMs:Date.now()-start})}
+};
+</script>

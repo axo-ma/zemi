@@ -6,6 +6,7 @@ These specifications govern Markdown reports for one ZEMI job run. All generated
 - [ReportWriter and fragment registry](report-writer.spec.md)
 - [Job Report](job-report.spec.md)
 - [Module Report](module-report.spec.md)
+- [Module Report Layout](module-report-layout.spec.md)
 - [Module Runs Report](module-runs-report.spec.md)
 - [Dataset Report](dataset-report.spec.md)
 - [Reproduction Report](reproduction-report.spec.md)

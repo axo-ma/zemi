@@ -420,6 +420,11 @@ class ReportWriter:
         tmp = target.with_name(f".{target.name}.tmp")
         tmp.write_text("\n".join(body).rstrip() + "\n", encoding="utf-8")
         _replace_report(tmp, target)
+        from .report_viewer import render_markdown
+        html_path = target.with_suffix('.html')
+        temporary = html_path.with_name('.' + html_path.name + '.tmp')
+        temporary.write_text(render_markdown(target, content="\n".join(body), bridge=False), encoding='utf-8')
+        _replace_report(temporary, html_path)
         if key[0] == "module":
             from .report_viewer import render_markdown, write_launcher
             model = {**self._module_data.get(key[1], {}), "schema_version": 1,
@@ -431,11 +436,6 @@ class ReportWriter:
                 content = content.replace(secret, '***')
             temporary.write_text(content + '\n', encoding='utf-8')
             _replace_report(temporary, data_path)
-            exported = render_markdown(target, content="\n".join(body), bridge=False)
-            html_path = target.with_suffix('.html')
-            temporary = html_path.with_name('.' + html_path.name + '.tmp')
-            temporary.write_text(exported, encoding='utf-8')
-            _replace_report(temporary, html_path)
             write_launcher(html_path)
             from .report_viewer import write_inline_report
             write_inline_report(html_path, target.with_suffix('.inline.html'))
@@ -935,6 +935,7 @@ class JobReporting:
         temporary = manifest.with_name('.' + manifest.name + '.tmp')
         temporary.write_text(content, encoding='utf-8')
         _replace_report(temporary, manifest)
+        self.writer._save(('module', module_id))
         for item in dataset.items:
             self.writer.write_worksheet_detection_report(module_id, item["id"],
                 dataset.render_worksheet_detection_report(item, history))

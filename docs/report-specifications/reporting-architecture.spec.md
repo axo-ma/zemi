@@ -94,9 +94,14 @@ numbered dataset items and all runs with predictions, statuses, errors,
 captured chat contexts, timings and retained artifact references. It preserves
 full numeric precision; presentation uses three decimal places.
 
-The standalone HTML contains no Qt script and supports native disclosure
-controls offline. Its neighbouring CMD opens the Qt viewer, which adds the
-existing local chat bridge using the neighbouring Markdown and chat manifest.
+Every writer-managed Markdown report also has an HTML counterpart, generated
+atomically from the same sections. MD navigation targets MD for GitHub;
+HTML navigation targets HTML, including sample and dataset item detail reports.
+HTML contains one common action script, selecting the available Qt or Codex
+MCP bridge. Its neighbouring CMD opens this same HTML in the Qt viewer.
+Only modules receive CMD launchers; individual Run Reports remain omitted.
+The module export is regenerated after its chat manifest is persisted so
+dataset cell actions appear in the saved HTML immediately.
 The inline export is a scoped HTML fragment using the same report content and
 palette. It removes local file/chat links and Qt scripts; disclosures still
 work. No plugin is required to view it, and it does not launch terminals.

@@ -1,6 +1,6 @@
 # Sample Report Specification
 
-Location: `samples/<registered-sample-name>.md` inside the run.
+Location: paired `samples/<registered-sample-name>.md` and `.html` inside the run.
 
 Sections, in order:
 

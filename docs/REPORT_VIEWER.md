@@ -1,9 +1,9 @@
 # Interactive Module Report and terminal chat
 
 Each Module Report has a neighbouring `<module>.cmd` launcher. Samples precedes the embedded Items table. No separate Dataset Report or individual Run Reports are generated.
-Double-click it to open the report in a local PyQt5 QWebEngine window. Markdown
-is converted to HTML on demand using markdown-it-py, with HTML tables and
-disclosures preserved. The viewer requires PyQt5, PyQtWebEngine,
+Double-click it to open the same generated HTML in a local PyQt5 QWebEngine
+window. Markdown and HTML are generated together; Markdown can also be opened
+directly and converted on demand. The viewer requires PyQt5, PyQtWebEngine,
 markdown-it-py and beautifulsoup4 in the interpreter generating the reports.
 There is no HTTP viewer server, Windows protocol registration or file association.
 
@@ -17,8 +17,10 @@ Target, Matches and Sample columns stay adjacent, including during partial runs
 with only a few samples. Additional samples use horizontal scrolling.
 
 Dataset Report keeps #, Item ID and Target fixed at the left while Matches and all
-Sample columns scroll horizontally. Other report tables keep their first column
-fixed. Upper table headers remain fixed during vertical scrolling.
+Sample columns scroll horizontally. Samples has its own narrow number column;
+other tables do not inherit the 290-pixel Item ID width. The authoritative contract
+is [Module Report Layout](report-specifications/module-report-layout.spec.md).
+Upper table headers remain fixed during vertical scrolling.
 Existing Markdown files and checkmarks are unchanged. The viewer overlays chat
 links on the existing prediction text or ✅. Links are blue and underlined on
 hover; errors are red. The disclosure triangle expands immediately; clicking
@@ -115,3 +117,6 @@ failed execution/evaluation. Papermill still writes and extracts each notebook;
 after evaluation redundant successful notebooks are removed. Results and raw
 contexts remain available for every run. Source notebook snapshots are retained.
 Single modules without an optimizer keep their single output notebook.
+# Интеграция с Coding Agents
+
+Открытие Excel и терминального чата из MCP App в Codex: [спецификация и установка](coding-agents/codex-integration.md).
