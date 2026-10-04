@@ -88,6 +88,14 @@ are located directly in the expected roots.
 
 ## Library documentation
 
+- Module report sample columns must stay compact. Show short results or a
+  short red Error label; keep long responses, error types and reasons inside
+  expandable details. Do not widen columns with diagnostic text.
+- Before changing module reports, read and follow
+  `docs/report-specifications/module-report.spec.md` and
+  `docs/report-specifications/module-report-layout.spec.md`. These specifications
+  are authoritative for layout, model-error contents and click behavior.
+
 - Keep the Windows Unicode console setup in `zemi/__init__.py` working for
   redirected stdout and stderr. ZEMI entry points should not require callers
   to set `PYTHONUTF8` or repeat console setup in each job.
