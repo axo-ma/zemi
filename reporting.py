@@ -166,6 +166,13 @@ def _compact_prediction(value):
 
 def _dataset_prediction_cell(run):
     if run.get("error") or run.get("evaluation_error") or run.get("status") == "failed":
+        if not run.get("error") and run.get("status") != "failed":
+            response = _error_response(run)
+            reason = run.get("evaluation_error") or (run.get("prediction") or {}).get("response_error")
+            details = "Reason: " + str(reason)
+            if response is not None:
+                details += "\n\nRaw response: " + _response_text(response)
+            return _inline_details("Model response error...", details)
         details = []
         for key in ("error", "evaluation_error"):
             if run.get(key):
@@ -173,7 +180,7 @@ def _dataset_prediction_cell(run):
         response = _error_response(run)
         if response is not None:
             details.append("Raw response: " + _response_text(response))
-        return _inline_details("Error...", "\n\n".join(details)) if details else "Error"
+        return _inline_details("Execution failure...", "\n\n".join(details)) if details else "Execution failure"
     if _exact(run):
         return "✅"
     return _compact_prediction(_comparison(run))
@@ -619,7 +626,11 @@ class DefaultReportRenderer:
         if number is not None:
             lines.insert(1, f"**Item #:** {number}")
         if run.get("error") or run.get("evaluation_error"):
-            lines.append("## Errors\n\n" + _cell(run.get("error") or run.get("evaluation_error")))
+            if run.get("error") or run.get("status") == "failed":
+                lines.append("## Execution failure\n\n" + _inline_details("Technical details", run.get("error") or run.get("evaluation_error")))
+            else:
+                lines.append("## Model response error\n\n" + _cell(run.get("evaluation_error")))
+                lines.append("## Raw model response\n\n" + _inline_details("Show response", _response_text(_error_response(run))))
         if run.get("prediction") is not None:
             lines.append("## Prediction\n\n```json\n" + json.dumps(run["prediction"], ensure_ascii=False, indent=2) + "\n```")
         if run.get("metrics"):

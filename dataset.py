@@ -201,6 +201,8 @@ def table_evaluator(trial, *, params):
         try:
             if execution_error:
                 raise ValueError(str(execution_error))
+            if isinstance(prediction, dict) and prediction.get("response_error"):
+                raise ValueError(str(prediction["response_error"]))
             if not isinstance(prediction, dict) or not isinstance(prediction.get("ranges"), list):
                 raise ValueError("Prediction must be an object with ranges array")
             found = {exact_range(value) for value in prediction["ranges"]}
