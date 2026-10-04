@@ -12,6 +12,7 @@ from urllib.parse import quote
 
 REPORT_SCRIPT = r'''
 (function(){
+if(window.qt)document.documentElement.classList.add('zemi-qt-viewer');
 function fitSticky(){document.querySelectorAll('table.dataset-items').forEach(table=>{const item=table.querySelector('th.sticky-item');if(item)table.style.setProperty('--item-width',item.getBoundingClientRect().width+'px');});}
 function fitTables(){document.querySelectorAll('.table-wrap').forEach(wrapper=>{const table=wrapper.querySelector('table');if(!table)return;const rows=[...table.querySelectorAll('tbody > tr')];if(rows.length<=10){wrapper.style.maxHeight='none';return;}const header=table.querySelector('thead');const height=(header?.getBoundingClientRect().height||0)+rows.slice(0,10).reduce((total,row)=>total+row.getBoundingClientRect().height,0)+2;wrapper.style.maxHeight=height+'px';});}
 requestAnimationFrame(()=>{fitTables();fitSticky();});
@@ -19,6 +20,7 @@ window.addEventListener('resize',()=>{fitTables();fitSticky();});
 if(window.qt && typeof QWebChannel==='function')new QWebChannel(qt.webChannelTransport,c=>{window.zemiBridge=c.objects.zemi;});
 function status(message){let el=document.getElementById('zemi-action-status');if(!el){el=document.createElement('div');el.id='zemi-action-status';el.setAttribute('role','status');document.body.prepend(el);}el.textContent=message;}
 document.addEventListener('click',async function(e){
+if(e.target.closest('#zemi-refresh-report')){e.preventDefault();window.location.reload();return;}
 const a=e.target.closest('a[href]');if(!a)return;
 const href=a.getAttribute('href');if(href.startsWith('#'))return;
 if(window.zemiBridge){e.preventDefault();e.stopPropagation();if(href.startsWith('zemi-chat:'))window.zemiBridge.openChat(href);else window.zemiBridge.openLink(a.href);return;}
@@ -47,6 +49,9 @@ WINDOWS_APP_ID = 'ZEMI.DatasetReport'
 
 CSS = '''
 body{margin:20px;background:#111314;color:#c6c9cc;font:14px/1.45 "Segoe UI",sans-serif}
+#zemi-refresh-report{margin-left:16px;padding:3px 9px;border:1px solid #393d40;border-radius:4px;background:#191c1e;color:#c6c9cc;font:inherit;cursor:pointer}
+#zemi-refresh-report:hover{background:#292d30}
+.zemi-qt-viewer #zemi-refresh-report{display:none}
 h1{font-size:23px;color:#eee}h2{font-size:18px}a{color:#40b1d5;text-decoration:none}a:hover,a:focus-visible{text-decoration:underline;text-underline-offset:3px}
 .table-wrap{overflow:auto;max-height:72vh;width:max-content;max-width:100%;box-sizing:border-box;border:1px solid #303538}
 table{border-collapse:separate;border-spacing:0;font-size:13px;min-width:0;width:max-content}
@@ -209,6 +214,15 @@ def render_markdown(path, *, content=None, bridge=True):
     for table in soup.find_all('table'):
         wrapper = soup.new_tag('div', attrs={'class': 'table-wrap'})
         table.wrap(wrapper)
+    button = soup.new_tag('button', id='zemi-refresh-report', type='button')
+    button.string = '↻ Обновить'
+    navigation = soup.find('a', href='index.html')
+    if navigation and navigation.parent.name == 'p':
+        navigation.parent.append(button)
+    else:
+        navigation = soup.new_tag('p')
+        navigation.append(button)
+        soup.insert(0, navigation)
     return ('<!doctype html><html><head><meta charset="utf-8">'
             '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; '
             'style-src \'unsafe-inline\'; script-src \'unsafe-inline\' qrc:; img-src file:;">'
@@ -236,6 +250,9 @@ def write_inline_report(report, destination):
     style = style.replace('margin:20px;', 'margin:0;padding:20px;').replace('max-height:72vh;', '')
     for tag in soup.find_all('script'):
         tag.decompose()
+    refresh = soup.find(id='zemi-refresh-report')
+    if refresh:
+        refresh.decompose()
     for a in soup.find_all('a', href=True):
         if not a['href'].startswith(('https://', '#')):
             del a['href']

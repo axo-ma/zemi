@@ -13,6 +13,12 @@ This specification defines two layouts for the same report type: a module report
 
 ## 1. Shared Rules
 
+- Standalone HTML provides a small `↻ Обновить` button next to the backlink
+  to the Job Report, above the tables. Clicking reloads the current HTML file.
+  There is no background polling or server. The CMD viewer hides this HTML
+  button and retains its existing window-toolbar refresh action. Static inline
+  fragments omit the button because they cannot reload the source file.
+
 - Before changing Module Report rendering or interactions, read this specification
   and [Module Report Layout](module-report-layout.spec.md). Preserve compact
   sample columns, verbatim model-response disclosures and top-level chat links.
