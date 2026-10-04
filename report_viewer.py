@@ -66,7 +66,9 @@ tbody tr:hover,tbody tr:hover td:first-child,tbody tr:hover td.sticky-target{bac
 summary{cursor:pointer}pre{white-space:pre-wrap;overflow-wrap:anywhere;max-width:450px;background:#202529;padding:10px;border-radius:4px;font:12px/1.5 Consolas,monospace}
 details[open]{min-width:180px;max-width:450px}code{font-family:Consolas,monospace}
 .run-error{color:#ef8181}.run-link{white-space:nowrap}
-.best-sample,.best-sample a{color:#33dd88;font-weight:700}
+.best-sample,.best-sample a{font-weight:700}
+.dataset-items th.best-sample-column,.dataset-items td.best-sample-column{background:#302329}
+.dataset-items tbody tr:hover td.best-sample-column{background:#3a2931}
 '''
 
 
@@ -146,6 +148,13 @@ def render_markdown(path, *, content=None, bridge=True):
                         cells[1 + offset].insert_before(cells[2 + offset].extract())
             table['class'] = [*table.get('class', []), 'dataset-items']
             headers = table.select('thead th')
+            for column, header in enumerate(headers):
+                if header.select_one('.best-sample'):
+                    header['class'] = [*header.get('class', []), 'best-sample-column']
+                    for row in table.select('tbody > tr'):
+                        cells = row.find_all('td', recursive=False)
+                        if column < len(cells):
+                            cells[column]['class'] = [*cells[column].get('class', []), 'best-sample-column']
             if offset:
                 table['class'].append('numbered')
                 headers[0]['class'] = ['sticky-number']

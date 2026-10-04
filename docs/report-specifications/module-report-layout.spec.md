@@ -57,7 +57,10 @@ sticky columns and native disclosures.
 - Matches and Sample columns sit immediately beside Target. No minimum width
   of 100% is allowed on this table or inherited from a shared table rule.
 - Each Sample header contains only Sample N and the score on the next line.
-  Highlight all tied highest-score samples in green. Do not append prompt names.
+  Highlight the entire column of each tied highest-score sample with a subtle
+  pink background, including its header and all body cells. Do not use green
+  header text to identify the best sample. Exact-match checks remain green.
+  Do not append prompt names.
 - Exact match is a green check with no repeated prediction. A single incorrect
   range is plain text. Multiple results show the first result with an ellipsis
   and expand in place.
