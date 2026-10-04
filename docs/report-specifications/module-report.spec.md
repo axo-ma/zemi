@@ -13,6 +13,10 @@ This specification defines two layouts for the same report type: a module report
 
 ## 1. Shared Rules
 
+- Before changing Module Report rendering or interactions, read this specification
+  and [Module Report Layout](module-report-layout.spec.md). Preserve compact
+  sample columns, verbatim model-response disclosures and top-level chat links.
+
 - Location: `<run_directory>/<module_id>.md`, directly beside `index.md`, without a modules subdirectory.
 - Include a `Back to job report` link targeting `index.md`.
 - The report must be understandable when opened directly from the run directory.

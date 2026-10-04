@@ -12,5 +12,7 @@ failure** and displays the escaped raw response in an expandable cell.
 Technical execution details remain available separately.
 
 Sample columns in module reports must remain compact. The visible error
-label is a short red **Error**; classification, reason and the full original
-response belong inside expandable details.
+label is a short red **Error**; only the full original model response belongs inside expandable details.
+Classification and reason remain in report data. Follow the canonical
+[Module Report Layout](report-specifications/module-report-layout.spec.md)
+for sizing and click behavior.

@@ -1,6 +1,6 @@
 # Module Report Layout
 
-Status: accepted. Updated: 2026-10-02.
+Status: accepted. Updated: 2026-10-04.
 
 This is the authoritative visual layout contract for the HTML Module Report,
 its CMD viewer, Codex MCP App and embedded inline HTML. It complements module-report.spec.md.
@@ -60,7 +60,15 @@ sticky columns and native disclosures.
   Highlight all tied highest-score samples in green. Do not append prompt names.
 - Exact match is a green check with no repeated prediction. A single incorrect
   range is plain text. Multiple results show the first result with an ellipsis
-  and expand in place. Errors disclose the reason and raw model response.
+  and expand in place.
+- Sample columns must stay compact: no error classification, explanation,
+  traceback or raw response may widen a collapsed cell. Model-response errors
+  use a short red Error label. Its expanded body contains only the verbatim
+  model response, without added headings such as Reason, Raw response or JSON.
+  Preserve line breaks, Markdown fences and special characters safely.
+- Keep model-response errors distinct from execution failures in report data.
+  Invalid model output is penalized by evaluation, not classified as a Python
+  execution failure. Actual execution failures retain their technical details.
 - Sample chat actions work in the CMD viewer and Codex MCP App when an actual
   captured context supports them. They do not alter the column mapping.
 - Chat links must be visible at the top level of every supported sample cell:

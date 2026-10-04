@@ -189,10 +189,6 @@ def render_markdown(path, *, content=None, bridge=True):
                         anchor = soup.new_tag('a', href=f'zemi-chat:{row_index}:{column}')
                         anchor['class'] = 'run-link' + (' run-error' if target.get_text().startswith('Error') else '')
                         anchor['title'] = 'Продолжить в терминале'
-                        if target.name == 'summary' and 'run-error' in target.get('class', []):
-                            anchor.string = 'Продолжить в терминале'
-                            target.parent.append(anchor)
-                            continue
                         for child in list(target.contents):
                             anchor.append(child.extract())
                         target.append(anchor)

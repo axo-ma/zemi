@@ -144,7 +144,7 @@ def _inline_details(label, text):
     # Keep each Markdown table row on one physical line. Escape HTML and pipes
     # so model output cannot create markup or additional table columns.
     def escaped(value):
-        return html.escape(str(value), quote=True).replace("|", "&#124;").replace("\r", "&#13;").replace("\n", "&#10;")
+        return html.escape(str(value), quote=True).replace("`", "&#96;").replace("|", "&#124;").replace("\r", "&#13;").replace("\n", "&#10;")
     return _Markdown(f"<details><summary>{escaped(label)}</summary><pre>{escaped(text)}</pre></details>")
 
 
@@ -168,10 +168,7 @@ def _dataset_prediction_cell(run):
     if run.get("error") or run.get("evaluation_error") or run.get("status") == "failed":
         if not run.get("error") and run.get("status") != "failed":
             response = _error_response(run)
-            reason = run.get("evaluation_error") or (run.get("prediction") or {}).get("response_error")
-            details = "Model response error\nReason: " + str(reason)
-            if response is not None:
-                details += "\n\nRaw response: " + _response_text(response)
+            details = _response_text(response) if response is not None else "—"
             return _Markdown(_inline_details("Error", details).replace('<summary>', '<summary class="run-error">', 1))
         details = []
         for key in ("error", "evaluation_error"):
