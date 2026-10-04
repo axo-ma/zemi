@@ -169,10 +169,10 @@ def _dataset_prediction_cell(run):
         if not run.get("error") and run.get("status") != "failed":
             response = _error_response(run)
             reason = run.get("evaluation_error") or (run.get("prediction") or {}).get("response_error")
-            details = "Reason: " + str(reason)
+            details = "Model response error\nReason: " + str(reason)
             if response is not None:
                 details += "\n\nRaw response: " + _response_text(response)
-            return _inline_details("Model response error...", details)
+            return _Markdown(_inline_details("Error", details).replace('<summary>', '<summary style="color:#ef4444">', 1))
         details = []
         for key in ("error", "evaluation_error"):
             if run.get(key):
@@ -180,7 +180,8 @@ def _dataset_prediction_cell(run):
         response = _error_response(run)
         if response is not None:
             details.append("Raw response: " + _response_text(response))
-        return _inline_details("Execution failure...", "\n\n".join(details)) if details else "Execution failure"
+        return _Markdown(_inline_details("Error", "Execution failure\n\n" + "\n\n".join(details)).replace(
+            '<summary>', '<summary style="color:#ef4444">', 1))
     if _exact(run):
         return "✅"
     return _compact_prediction(_comparison(run))
