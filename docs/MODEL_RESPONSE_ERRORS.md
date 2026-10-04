@@ -10,3 +10,7 @@ rules; it does not convert the response into a successful prediction.
 The module report distinguishes **Model response error** from **Execution
 failure** and displays the escaped raw response in an expandable cell.
 Technical execution details remain available separately.
+
+Sample columns in module reports must remain compact. The visible error
+label is a short red **Error**; classification, reason and the full original
+response belong inside expandable details.
